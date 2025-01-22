@@ -10,7 +10,7 @@ output_file = open(new_file, 'w')
 counter = 0
 for line in f:
     line = json.loads(line)
-    print(line)
+    #print(line)
 
     # convert bounding boxes to same format as vidshikra:
     # {frame_number: [bbbox], ...}
@@ -18,6 +18,7 @@ for line in f:
 
     # read video to find out fps of frames
 
+    '''
     bboxes = line['box']
     video_path = line['vid_path']
 
@@ -41,13 +42,14 @@ for line in f:
 
     print(new_bbox)
     print(len(new_bbox))
-
+    '''
 
     video_data = {
             "source": line['source'],
             "type": "conv",
             "id": line['id'],
-            "video": video_path,
+            #"video": video_path,
+            "video": line['vid_path'],
             "instruction": None,
             "conversations": [
                 {
@@ -56,14 +58,13 @@ for line in f:
                 },
                 {
                     "from": "gpt",
-                    "value": new_bbox,
+                    #"value": new_bbox,
+                    "value": line['box'],
                 }
             ],
         }
     new_json.append(video_data)
     counter += 1
-    if counter == 2:
-        exit()
     if counter == 100000:
         break
 json.dump(new_json, output_file)
