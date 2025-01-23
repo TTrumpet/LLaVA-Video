@@ -375,6 +375,35 @@ def _add_speaker_and_signal(header, source, get_conversation=True):
     return conversation
 
 
+# Normalize the bounding box to 0-100 scale.
+def normalize_bbox(bbox, width, height):
+    """
+    Normalize the bbox
+    """
+    xmin, ymin, xmax, ymax = bbox
+    xmin = int(round(xmin / width, 2) * 100)
+    ymin = int(round(ymin / height, 2) * 100)
+    xmax = int(round(xmax / width, 2) * 100)
+    ymax = int(round(ymax / height, 2) * 100)
+    
+    return [xmin, ymin, xmax, ymax]
+
+
+# Used to convert frame ids to normalized counts.
+def convert(duration, x, num_frames=100):
+    x = x / duration * num_frames
+    x = str(min(round(x), num_frames - 1))
+    # TODO: need to adjust if we ever go above 100 frames.
+    if len(x) == 1:
+        x = "0" + x
+    return x
+
+
+# Convert bounding boxes to string.
+def box_to_str(box):
+    return " ".join([str(int(x)) for x in box])
+
+
 def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> Dict:
     is_multimodal = data_args.is_multimodal
     if not is_multimodal:
@@ -385,20 +414,51 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
             # TODO maybe this should be changed for interleaved data?
             # if DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
             # only check for num_im=1
-            num_im = len(re.findall(DEFAULT_IMAGE_TOKEN, sentence["value"]))
-            if num_im == 1 and DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
-                sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "").strip()
-                sentence["value"] = DEFAULT_IMAGE_TOKEN + "\n" + sentence["value"]
-                sentence["value"] = sentence["value"].strip()
-                if "mmtag" in conversation_lib.default_conversation.version:
-                    sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "<Image>" + DEFAULT_IMAGE_TOKEN + "</Image>")
-            replace_token = DEFAULT_IMAGE_TOKEN
-            if data_args.mm_use_im_start_end:
-                replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
-            sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
+            try:
+                num_im = len(re.findall(DEFAULT_IMAGE_TOKEN, sentence["value"]))
+                if num_im == 1 and DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
+                    sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "").strip()
+                    sentence["value"] = DEFAULT_IMAGE_TOKEN + "\n" + sentence["value"]
+                    sentence["value"] = sentence["value"].strip()
+                    if "mmtag" in conversation_lib.default_conversation.version:
+                        sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "<Image>" + DEFAULT_IMAGE_TOKEN + "</Image>")
+                replace_token = DEFAULT_IMAGE_TOKEN if '<video>' not in sentence["value"] else '<video>'
+                if data_args.mm_use_im_start_end:
+                    replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
+                sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
 
-            # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
-            sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
+                # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
+                sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
+            except:
+                # For Elysium data.
+                bbox_frame_ratio = len(sentence["value"]) / len(data_args.frame_idx)
+                selected_bbox_fid = [int(x*bbox_frame_ratio) for x in range(len(data_args.frame_idx))]
+                normalize_frame_to_bbox = {}
+                all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
+                for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
+                    normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(sentence["value"][fid], 1, 1)
+                sentence["value"] = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
+                
+            try:
+                # For vid shikra data.
+                # Replace the tokens with normalized frame ids.
+                replace_set = []
+                for k, v in data_args.meta['token'].items():
+                    replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
+                for x1, x2 in replace_set:
+                    sentence["value"] = sentence["value"].replace(x1, x2)
+                # Replace bounding boxes.
+                all_bbox_fid = list(data_args.meta['bboxes'].keys())
+                all_norm_fid = [x[1] for x in replace_set]
+                all_norm_fid = [str(x) for x in range(int(all_norm_fid[0]), int(all_norm_fid[1]) + 1)]
+                selected_bbox_fid = [x for x in range(int(all_bbox_fid[0]), int(all_bbox_fid[-1]) + 1, len(all_bbox_fid) // (len(all_norm_fid) - 1))]
+                normalize_frame_to_bbox = {}
+                for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
+                    normalize_frame_to_bbox[int(norm_fid)] = data_args.meta['bboxes'][str(fid)]
+                bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
+                sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
+            except:
+                pass
 
     return sources
 
@@ -569,7 +629,7 @@ def preprocess_qwen(sources, tokenizer: transformers.PreTrainedTokenizer, has_im
         tokenizer.add_tokens(["<image>"], special_tokens=True)
 
     image_token_index = tokenizer.convert_tokens_to_ids("<image>")
-    im_start, im_end = tokenizer.additional_special_tokens_ids
+    im_start, im_end = tokenizer.additional_special_tokens_ids[:2]
     # unmask_tokens = ["<|im_start|>", "<|im_start|>", "\n"]
     unmask_tokens_idx =  [198, im_start, im_end]
     nl_tokens = tokenizer("\n").input_ids
@@ -1049,7 +1109,10 @@ class LazySupervisedDataset(Dataset):
     def modality_lengths(self):
         length_list = []
         for sample in self.list_data_dict:
-            cur_len = sum(len(conv["value"].split()) for conv in sample["conversations"])
+            try:
+                cur_len = sum(len(conv["value"].split()) for conv in sample["conversations"])
+            except:
+                cur_len = sum(len(conv["value"]) for conv in sample["conversations"])
             assert cur_len > 0, f"Conversation length is 0 for {sample}"
             if "image" in sample or "video" in sample or self.data_args.early_mix_text:
                 length_list.append(cur_len)
@@ -1191,10 +1254,19 @@ class LazySupervisedDataset(Dataset):
                         except IOError:
                             print(f"Failed to read frame at path: {frame_path}")
                 else:
-                    video, video_time, frame_time, num_frames_to_sample = process_video_with_decord(video_file, self.data_args)
+                    video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
 
                 processor = self.data_args.image_processor
                 image = processor.preprocess(video, return_tensors="pt")["pixel_values"]
+                # conv_value = sources[0]["conversations"][0]["value"]
+                # if isinstance(conv_value, list):
+                #     print(self.data_args)
+                #     conv_value = process_bbox(conv_value, self.data_args)
+                self.data_args.frame_idx = frame_idx
+                try:
+                    self.data_args.meta = sources[0]["meta"]
+                except:
+                    pass
                 if self.data_args.add_time_instruction:
                     time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
                     sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{time_instruciton}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
@@ -1448,7 +1520,6 @@ def get_model(model_args, training_args, bnb_model_from_pretrained_args):
 
 def train(attn_implementation=None):
     global local_rank
-
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
