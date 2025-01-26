@@ -70,7 +70,8 @@ def load_video(video_path, max_frames_num,fps=1,force_sample=False):
     return spare_frames,frame_time,video_time
 
 def load_model(pretrained, model_name, device, device_map):
-    tokenizer, model, image_processor, max_length = load_pretrained_model(pretrained, None, model_name, load_4bit=False, torch_dtype="bfloat16", device_map=device_map)  # Add any other thing you want to pass in llava_model_args
+    overwrite_config = {'tie_word_embeddings': False, 'use_cache': True, "vocab_size": 152064} if '7B' in model_name else None
+    tokenizer, model, image_processor, max_length = load_pretrained_model(pretrained, None, model_name, load_4bit=False, torch_dtype="bfloat16", device_map=device_map, overwrite_config=overwrite_config)  # Add any other thing you want to pass in llava_model_args
     model.eval()
     # model = model.to(torch.bfloat16)
     return tokenizer, model, image_processor, max_length
@@ -92,12 +93,12 @@ def main(split, pretrained):
 
     # initialize model
     #pretrained = "/lustre/fs1/home/ttran/CAP/LLaVA-Video/work_dirs/llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_elysium/checkpoint-500/"
+    pretrained = "/home/jfioresi/vlm/LLaVA-Video/work_dirs/llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_shikra"
     model_name = "llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_vidshikra"
     model_name_short = pretrained[pretrained.index("video") + 6 :]
     device = "cuda"
     device_map = "auto"
     max_frames_num = 64
-
     tokenizer, model, image_processor, max_length = load_model(pretrained, model_name, device, device_map)
 
     # read v_shikra test set json
@@ -136,6 +137,8 @@ def main(split, pretrained):
 
         output = text_outputs[text_outputs.index("{"):text_outputs.index("}") + 1]
         frames = ast.literal_eval(output)
+        
+        print(text_outputs)
 
         # visualize outputs
         # TODO: conda env does not work
