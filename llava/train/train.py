@@ -1078,7 +1078,7 @@ class LazySupervisedDataset(Dataset):
                     elif sampling_strategy == "random" and sampling_number is not None:
                         random.shuffle(cur_data_dict)
                         cur_data_dict = cur_data_dict[:sampling_number]
-
+                    
                     rank0_print(f"Loaded {len(cur_data_dict)} samples from {json_path}")
                     self.list_data_dict.extend(cur_data_dict)
         else:
@@ -1731,6 +1731,11 @@ def train(attn_implementation=None):
             if "mm_language_model" in tunable_parts:
                 for name, param in model.named_parameters():
                     if "vision_tower" not in name and "mm_projector" not in name and "vision_resampler" not in name:
+                        param.requires_grad_(True)
+            if training_args.lora_enable:
+                print('lora enable attempt:')
+                for name, param in model.named_parameters():
+                    if "lora" in name and "vision_tower" not in name and "mm_projector" not in name and "vision_resampler" not in name:
                         param.requires_grad_(True)
 
         total_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
