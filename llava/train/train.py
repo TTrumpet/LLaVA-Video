@@ -417,65 +417,9 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
             
             # Specify dataset for preprocessing
             # TODO: Only checks first dataset path in yaml, fix for multi-dataset
-            if 'Elysium' in data_args.dataset_paths[0]:
-                # For Elysium data.
-                bbox_frame_ratio = len(sentence["value"]) / len(data_args.frame_idx)
-                selected_bbox_fid = [int(x*bbox_frame_ratio) for x in range(len(data_args.frame_idx))]
-                normalize_frame_to_bbox = {}
-                all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
-                for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
-                    normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(sentence["value"][fid], 1, 1)
-                sentence["value"] = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
-            elif 'vid_shikra' in data_args.dataset_paths[0]:
-                # For vid shikra data.
-                # Replace the tokens with normalized frame ids.
-                replace_set = []
-                for k, v in data_args.meta['token'].items():
-                    replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
-                for x1, x2 in replace_set:
-                    sentence["value"] = sentence["value"].replace(x1, x2)
-                # Replace bounding boxes.
-                all_bbox_fid = list(data_args.meta['bboxes'].keys())
-                all_norm_fid = [x[1] for x in replace_set]
-                all_norm_fid = [str(x) for x in range(int(all_norm_fid[0]), int(all_norm_fid[1]) + 1)]
-                selected_bbox_fid = [x for x in range(int(all_bbox_fid[0]), int(all_bbox_fid[-1]) + 1, len(all_bbox_fid) // (len(all_norm_fid) - 1))]
-                normalize_frame_to_bbox = {}
-                for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
-                    normalize_frame_to_bbox[int(norm_fid)] = data_args.meta['bboxes'][str(fid)]
-                bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
-                sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
-            elif 'VTimeLLM' in data_args.dataset_paths[0]:
-                # Replace the tokens with frame ids
-                replace_set = []
-                for k, v in data_args.meta['token'].items():
-                    replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
-                for x1, x2 in replace_set:
-                    sentence["value"] = sentence["value"].replace(x1, x2)
-            elif "tvqa_plus" in data_args.dataset_paths[0]:
-                # Replace the tokens with frame ids
-                # TODO: multiple bounding boxes, boxes outside of temporal interval
-                replace_set = []
-                for k, v in data_args.meta['token'].items():
-                    if k == '<bbox>':
-                        continue
-                    replace_set.append(k, v)
-                
-                normalize_frame_to_bbox = {}
-                for l, val in data_args.meta['token']['<bbox>'].items():
-                    if len(val) == 0:
-                        continue
-                    if l < data_args.meta['token']['<t0>'] or l > data_args.meta['token']['<t1>']:
-                        continue
-                    bbox = val[0]
-                    xmin = bbox['top'] - bbox['height']
-                    xmax = bbox['top']
-                    ymin = bbox['left']
-                    ymax = bbox['left'] + bbox['width']
-                    normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
-                    replace_set.append(k, normalize_frame_to_bbox)
-                for x1, x2 in replace_set:
-                    sentence["value"] = sentence["value"].replace(x1, x2) 
-            else:
+            print("Preprocessing Dataset...")
+            try:
+                #rank0_print("Default Preprocessing...")
                 num_im = len(re.findall(DEFAULT_IMAGE_TOKEN, sentence["value"]))
                 if num_im == 1 and DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
                     sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "").strip()
@@ -490,7 +434,71 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
 
                 # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
                 sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
-
+            except:
+                if 'Elysium' in data_args.dataset_paths[0]:
+                    #rank0_print("Preprocessing Elysium...")
+                    # For Elysium data.
+                    bbox_frame_ratio = len(sentence["value"]) / len(data_args.frame_idx)
+                    selected_bbox_fid = [int(x*bbox_frame_ratio) for x in range(len(data_args.frame_idx))]
+                    normalize_frame_to_bbox = {}
+                    all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
+                    for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
+                        normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(sentence["value"][fid], 1, 1)
+                    sentence["value"] = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
+                elif 'vid_shikra' in data_args.dataset_paths[0]:
+                    #rank0_print("Preprocessing VidShikra...")
+                    # For vid shikra data.
+                    # Replace the tokens with normalized frame ids.
+                    replace_set = []
+                    for k, v in data_args.meta['token'].items():
+                        replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
+                    for x1, x2 in replace_set:
+                        sentence["value"] = sentence["value"].replace(x1, x2)
+                    # Replace bounding boxes.
+                    all_bbox_fid = list(data_args.meta['bboxes'].keys())
+                    all_norm_fid = [x[1] for x in replace_set]
+                    all_norm_fid = [str(x) for x in range(int(all_norm_fid[0]), int(all_norm_fid[1]) + 1)]
+                    selected_bbox_fid = [x for x in range(int(all_bbox_fid[0]), int(all_bbox_fid[-1]) + 1, len(all_bbox_fid) // (len(all_norm_fid) - 1))]
+                    normalize_frame_to_bbox = {}
+                    for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
+                        normalize_frame_to_bbox[int(norm_fid)] = data_args.meta['bboxes'][str(fid)]
+                    bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
+                    sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
+                elif 'VTimeLLM' in data_args.dataset_paths[0]:
+                    rank0_print("Preprocessing VTimeLLM...")
+                    # Replace the tokens with frame ids
+                    replace_set = []
+                    for k, v in data_args.meta['token'].items():
+                        replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
+                    for x1, x2 in replace_set:
+                        sentence["value"] = sentence["value"].replace(x1, x2)
+                elif "tvqa_plus" in data_args.dataset_paths[0]:
+                    rank0_print("Preprocessing TVQA+...")
+                    # Replace the tokens with frame ids
+                    # TODO: multiple bounding boxes, boxes outside of temporal interval
+                    replace_set = []
+                    for k, v in data_args.meta['token'].items():
+                        if k == '<bbox>':
+                            continue
+                        replace_set.append(k, v)
+                    
+                    normalize_frame_to_bbox = {}
+                    for l, val in data_args.meta['token']['<bbox>'].items():
+                        if len(val) == 0:
+                            continue
+                        if l < data_args.meta['token']['<t0>'] or l > data_args.meta['token']['<t1>']:
+                            continue
+                        bbox = val[0]
+                        xmin = bbox['top'] - bbox['height']
+                        xmax = bbox['top']
+                        ymin = bbox['left']
+                        ymax = bbox['left'] + bbox['width']
+                        normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
+                        replace_set.append(k, normalize_frame_to_bbox)
+                    for x1, x2 in replace_set:
+                        sentence["value"] = sentence["value"].replace(x1, x2) 
+                else:
+                    pass
     return sources
 
 
@@ -1244,6 +1252,7 @@ class LazySupervisedDataset(Dataset):
                 image = [self.process_image(image_file)]
             sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)
 
+        # TODO: edit so slight changes e.g. "video_path" instead of "video" still work
         elif "video" in sources[0]:
             video_file = self.list_data_dict[i]["video"]
             video_folder = self.data_args.video_folder
