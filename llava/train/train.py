@@ -414,22 +414,10 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
             # TODO maybe this should be changed for interleaved data?
             # if DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
             # only check for num_im=1
-            try:
-                num_im = len(re.findall(DEFAULT_IMAGE_TOKEN, sentence["value"]))
-                if num_im == 1 and DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
-                    sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "").strip()
-                    sentence["value"] = DEFAULT_IMAGE_TOKEN + "\n" + sentence["value"]
-                    sentence["value"] = sentence["value"].strip()
-                    if "mmtag" in conversation_lib.default_conversation.version:
-                        sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "<Image>" + DEFAULT_IMAGE_TOKEN + "</Image>")
-                replace_token = DEFAULT_IMAGE_TOKEN if '<video>' not in sentence["value"] else '<video>'
-                if data_args.mm_use_im_start_end:
-                    replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
-                sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
-
-                # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
-                sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
-            except:
+            
+            # Specify dataset for preprocessing
+            # TODO: Only checks first dataset path in yaml, fix for multi-dataset
+            if 'Elysium' in data_args.dataset_paths[0]:
                 # For Elysium data.
                 bbox_frame_ratio = len(sentence["value"]) / len(data_args.frame_idx)
                 selected_bbox_fid = [int(x*bbox_frame_ratio) for x in range(len(data_args.frame_idx))]
@@ -438,8 +426,7 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                 for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
                     normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(sentence["value"][fid], 1, 1)
                 sentence["value"] = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
-                
-            try:
+            elif 'vid_shikra' in data_args.dataset_paths[0]:
                 # For vid shikra data.
                 # Replace the tokens with normalized frame ids.
                 replace_set = []
@@ -457,8 +444,52 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                     normalize_frame_to_bbox[int(norm_fid)] = data_args.meta['bboxes'][str(fid)]
                 bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
                 sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
-            except:
-                pass
+            elif 'VTimeLLM' in data_args.dataset_paths[0]:
+                # Replace the tokens with frame ids
+                replace_set = []
+                for k, v in data_args.meta['token'].items():
+                    replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
+                for x1, x2 in replace_set:
+                    sentence["value"] = sentence["value"].replace(x1, x2)
+            elif "tvqa_plus" in data_args.dataset_paths[0]:
+                # Replace the tokens with frame ids
+                # TODO: multiple bounding boxes, boxes outside of temporal interval
+                replace_set = []
+                for k, v in data_args.meta['token'].items():
+                    if k == '<bbox>':
+                        continue
+                    replace_set.append(k, v)
+                
+                normalize_frame_to_bbox = {}
+                for l, val in data_args.meta['token']['<bbox>'].items():
+                    if len(val) == 0:
+                        continue
+                    if l < data_args.meta['token']['<t0>'] or l > data_args.meta['token']['<t1>']:
+                        continue
+                    bbox = val[0]
+                    xmin = bbox['top'] - bbox['height']
+                    xmax = bbox['top']
+                    ymin = bbox['left']
+                    ymax = bbox['left'] + bbox['width']
+                    normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
+                    replace_set.append(k, normalize_frame_to_bbox)
+                for x1, x2 in replace_set:
+                    sentence["value"] = sentence["value"].replace(x1, x2) 
+            else:
+                num_im = len(re.findall(DEFAULT_IMAGE_TOKEN, sentence["value"]))
+                if num_im == 1 and DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
+                    sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "").strip()
+                    sentence["value"] = DEFAULT_IMAGE_TOKEN + "\n" + sentence["value"]
+                    sentence["value"] = sentence["value"].strip()
+                    if "mmtag" in conversation_lib.default_conversation.version:
+                        sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "<Image>" + DEFAULT_IMAGE_TOKEN + "</Image>")
+                replace_token = DEFAULT_IMAGE_TOKEN if '<video>' not in sentence["value"] else '<video>'
+                if data_args.mm_use_im_start_end:
+                    replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
+                sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
+
+                # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
+                sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
 
     return sources
 
@@ -1263,6 +1294,7 @@ class LazySupervisedDataset(Dataset):
                 #     print(self.data_args)
                 #     conv_value = process_bbox(conv_value, self.data_args)
                 self.data_args.frame_idx = frame_idx
+                
                 try:
                     self.data_args.meta = sources[0]["meta"]
                 except:
@@ -1271,6 +1303,7 @@ class LazySupervisedDataset(Dataset):
                     time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
                     sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{time_instruciton}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
                 image = [(image, video[0].size, "video")]
+                
                 sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)
                 # print(sources)
             except Exception as e:
