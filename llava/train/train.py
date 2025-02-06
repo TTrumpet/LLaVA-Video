@@ -430,19 +430,21 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
 
             # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
             sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
-            
-            # # For Elysium data.
-            # bbox_frame_ratio = len(sentence["value"]) / len(data_args.frame_idx)
-            # selected_bbox_fid = [int(x*bbox_frame_ratio) for x in range(len(data_args.frame_idx))]
-            # normalize_frame_to_bbox = {}
-            # all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
-            # for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
-            #     normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(sentence["value"][fid], 1, 1)
-            # sentence["value"] = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
-                
-            # For vid shikra and elysium data.
-            # Replace the tokens with normalized frame ids.
-            if 'token' in data_args.meta:
+
+            print("Preprocessing Dataset...")
+            if 'Elysium' in data_args.dataset_paths[0]:
+                bbox_list = data_args.meta['bboxes']
+                bbox_list = bbox_list[data_args.start_idx:data_args.start_idx + len(data_args.frame_idx)]
+                normalize_frame_to_bbox = {}
+                all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
+                for idx, norm_fid in enumerate(all_norm_fid):
+                    normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(bbox_list[idx], 1, 1)
+                bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
+                sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
+            elif 'vid_shikra' in data_args.dataset_paths[0]:
+                #rank0_print("Preprocessing VidShikra...")
+                # For vid shikra data.
+                # Replace the tokens with normalized frame ids.
                 replace_set = []
                 for k, v in data_args.meta['token'].items():
                     replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
@@ -458,16 +460,39 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                     normalize_frame_to_bbox[int(norm_fid)] = data_args.meta['bboxes'][str(fid)]
                 bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
                 sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
-                print(sentence["value"])
-            elif 'bboxes' in data_args.meta:
-                bbox_list = data_args.meta['bboxes']
-                bbox_list = bbox_list[data_args.start_idx:data_args.start_idx + len(data_args.frame_idx)]
+            elif 'VTimeLLM' in data_args.dataset_paths[0]:
+                rank0_print("Preprocessing VTimeLLM...")
+                # Replace the tokens with frame ids
+                replace_set = []
+                for k, v in data_args.meta['token'].items():
+                    replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
+                for x1, x2 in replace_set:
+                    sentence["value"] = sentence["value"].replace(x1, x2)
+            elif "tvqa_plus" in data_args.dataset_paths[0]:
+                rank0_print("Preprocessing TVQA+...")
+                # Replace the tokens with frame ids
+                # TODO: multiple bounding boxes, boxes outside of temporal interval
+                replace_set = []
+                for k, v in data_args.meta['token'].items():
+                    if k == '<bbox>':
+                        continue
+                    replace_set.append(k, v)
+                
                 normalize_frame_to_bbox = {}
-                all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
-                for idx, norm_fid in enumerate(all_norm_fid):
-                    normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(bbox_list[idx], 1, 1)
-                bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
-                sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
+                for l, val in data_args.meta['token']['<bbox>'].items():
+                    if len(val) == 0:
+                        continue
+                    if l < data_args.meta['token']['<t0>'] or l > data_args.meta['token']['<t1>']:
+                        continue
+                    bbox = val[0]
+                    xmin = bbox['top'] - bbox['height']
+                    xmax = bbox['top']
+                    ymin = bbox['left']
+                    ymax = bbox['left'] + bbox['width']
+                    normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
+                    replace_set.append(k, normalize_frame_to_bbox)
+                for x1, x2 in replace_set:
+                    sentence["value"] = sentence["value"].replace(x1, x2) 
             else:
                 pass
 
