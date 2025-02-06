@@ -37,7 +37,8 @@ import transformers
 import tokenizers
 import deepspeed
 
-from transformers import AutoConfig
+from peft import PeftModelForCausalLM 
+from transformers import AutoConfig, TrainerCallback
 from torch.utils.data import Dataset
 from llava.constants import IGNORE_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IMAGE_TOKEN_INDEX
 from llava.train.llava_trainer import LLaVATrainer
@@ -45,7 +46,7 @@ from llava.train.llava_trainer import LLaVATrainer
 from llava import conversation as conversation_lib
 from llava.model import *
 from llava.mm_utils import process_highres_image, process_anyres_image, process_highres_image_crop_split, tokenizer_image_token
-from llava.utils import rank0_print, process_video_with_pyav, process_video_with_decord
+from llava.utils import rank0_print, process_video_with_pyav, process_video_with_decord, process_video_with_decord_fps
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -247,8 +248,9 @@ def find_all_linear_names(model):
         if any(mm_keyword in name for mm_keyword in multimodal_keywords):
             continue
         if isinstance(module, cls):
-            names = name.split(".")
-            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+            lora_module_names.add(name)
+            # names = name.split(".")
+            # lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
     if "lm_head" in lora_module_names:  # needed for 16-bit
         lora_module_names.remove("lm_head")
@@ -414,34 +416,33 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
             # TODO maybe this should be changed for interleaved data?
             # if DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
             # only check for num_im=1
-            try:
-                num_im = len(re.findall(DEFAULT_IMAGE_TOKEN, sentence["value"]))
-                if num_im == 1 and DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
-                    sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "").strip()
-                    sentence["value"] = DEFAULT_IMAGE_TOKEN + "\n" + sentence["value"]
-                    sentence["value"] = sentence["value"].strip()
-                    if "mmtag" in conversation_lib.default_conversation.version:
-                        sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "<Image>" + DEFAULT_IMAGE_TOKEN + "</Image>")
-                replace_token = DEFAULT_IMAGE_TOKEN if '<video>' not in sentence["value"] else '<video>'
-                if data_args.mm_use_im_start_end:
-                    replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
-                sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
+            num_im = len(re.findall(DEFAULT_IMAGE_TOKEN, sentence["value"]))
+            if num_im == 1 and DEFAULT_IMAGE_TOKEN in sentence["value"] and not sentence["value"].startswith(DEFAULT_IMAGE_TOKEN):
+                sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "").strip()
+                sentence["value"] = DEFAULT_IMAGE_TOKEN + "\n" + sentence["value"]
+                sentence["value"] = sentence["value"].strip()
+                if "mmtag" in conversation_lib.default_conversation.version:
+                    sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, "<Image>" + DEFAULT_IMAGE_TOKEN + "</Image>")
+            replace_token = DEFAULT_IMAGE_TOKEN #if '<video>' not in sentence["value"] else '<video>'
+            if data_args.mm_use_im_start_end:
+                replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
+            sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token).replace('<video>', '')
 
-                # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
-                sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
-            except:
-                # For Elysium data.
-                bbox_frame_ratio = len(sentence["value"]) / len(data_args.frame_idx)
-                selected_bbox_fid = [int(x*bbox_frame_ratio) for x in range(len(data_args.frame_idx))]
-                normalize_frame_to_bbox = {}
-                all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
-                for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
-                    normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(sentence["value"][fid], 1, 1)
-                sentence["value"] = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
+            # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
+            sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
+            
+            # # For Elysium data.
+            # bbox_frame_ratio = len(sentence["value"]) / len(data_args.frame_idx)
+            # selected_bbox_fid = [int(x*bbox_frame_ratio) for x in range(len(data_args.frame_idx))]
+            # normalize_frame_to_bbox = {}
+            # all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
+            # for fid, norm_fid in zip(selected_bbox_fid, all_norm_fid):
+            #     normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(sentence["value"][fid], 1, 1)
+            # sentence["value"] = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
                 
-            try:
-                # For vid shikra data.
-                # Replace the tokens with normalized frame ids.
+            # For vid shikra and elysium data.
+            # Replace the tokens with normalized frame ids.
+            if 'token' in data_args.meta:
                 replace_set = []
                 for k, v in data_args.meta['token'].items():
                     replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
@@ -457,7 +458,17 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                     normalize_frame_to_bbox[int(norm_fid)] = data_args.meta['bboxes'][str(fid)]
                 bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
                 sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
-            except:
+                print(sentence["value"])
+            elif 'bboxes' in data_args.meta:
+                bbox_list = data_args.meta['bboxes']
+                bbox_list = bbox_list[data_args.start_idx:data_args.start_idx + len(data_args.frame_idx)]
+                normalize_frame_to_bbox = {}
+                all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
+                for idx, norm_fid in enumerate(all_norm_fid):
+                    normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(bbox_list[idx], 1, 1)
+                bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
+                sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
+            else:
                 pass
 
     return sources
@@ -1254,7 +1265,8 @@ class LazySupervisedDataset(Dataset):
                         except IOError:
                             print(f"Failed to read frame at path: {frame_path}")
                 else:
-                    video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
+                    video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx = process_video_with_decord_fps(video_file, self.data_args)
+                    # video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
 
                 processor = self.data_args.image_processor
                 image = processor.preprocess(video, return_tensors="pt")["pixel_values"]
@@ -1263,23 +1275,23 @@ class LazySupervisedDataset(Dataset):
                 #     print(self.data_args)
                 #     conv_value = process_bbox(conv_value, self.data_args)
                 self.data_args.frame_idx = frame_idx
+                self.data_args.start_idx = start_idx
                 try:
                     self.data_args.meta = sources[0]["meta"]
                 except:
                     pass
                 if self.data_args.add_time_instruction:
-                    time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
+                    # Removed "uniformly" from the instruction.
+                    time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
                     sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{time_instruciton}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
                 image = [(image, video[0].size, "video")]
                 sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)
-                # print(sources)
             except Exception as e:
                 print(f"Error: {e}")
                 print(f"Failed to read video file: {video_file}")
                 return self._get_item(i + 1)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
-
         has_image = ("image" in self.list_data_dict[i]) or ("video" in self.list_data_dict[i])
         data_dict = preprocess(sources, self.tokenizer, has_image=has_image)
 
@@ -1307,7 +1319,6 @@ class LazySupervisedDataset(Dataset):
             data_dict["prompt"] = prompt
 
         data_dict["id"] = self.list_data_dict[i].get("id", i)
-
         return data_dict
 
 
@@ -1518,6 +1529,21 @@ def get_model(model_args, training_args, bnb_model_from_pretrained_args):
     return model
 
 
+class SaveInterimCallback(TrainerCallback):
+    def on_save(self, args, state, control, **kwargs):
+        # save model
+        if isinstance(kwargs['model'], PeftModelForCausalLM):
+            torch.cuda.synchronize()
+            state_dict = get_peft_state_maybe_zero_3(kwargs['model'].named_parameters(), "none")
+            checkpoint_folder = f"checkpoint-{state.global_step}"
+            output_dir = os.path.join(args.output_dir, checkpoint_folder)
+            non_lora_state_dict = get_peft_state_non_lora_maybe_zero_3(kwargs['model'].named_parameters())
+            if hasattr(kwargs['model'], "config"):
+                kwargs['model'].config.save_pretrained(output_dir)
+            kwargs['model'].save_pretrained(output_dir, state_dict=state_dict)
+            torch.save(non_lora_state_dict, os.path.join(output_dir, 'non_lora_trainables.bin'))
+
+
 def train(attn_implementation=None):
     global local_rank
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
@@ -1581,24 +1607,24 @@ def train(attn_implementation=None):
 
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-    if training_args.lora_enable:
-        from peft import LoraConfig, get_peft_model
+    # if training_args.lora_enable:
+    #     from peft import LoraConfig, get_peft_model
 
-        lora_config = LoraConfig(
-            r=training_args.lora_r,
-            lora_alpha=training_args.lora_alpha,
-            target_modules=find_all_linear_names(model),
-            lora_dropout=training_args.lora_dropout,
-            bias=training_args.lora_bias,
-            task_type="CAUSAL_LM",
-        )
-        if training_args.bits == 16:
-            if training_args.bf16:
-                model.to(torch.bfloat16)
-            if training_args.fp16:
-                model.to(torch.float16)
-        rank0_print("Adding LoRA adapters...")
-        model = get_peft_model(model, lora_config)
+    #     lora_config = LoraConfig(
+    #         r=training_args.lora_r,
+    #         lora_alpha=training_args.lora_alpha,
+    #         target_modules=find_all_linear_names(model),
+    #         lora_dropout=training_args.lora_dropout,
+    #         bias=training_args.lora_bias,
+    #         task_type="CAUSAL_LM",
+    #     )
+    #     if training_args.bits == 16:
+    #         if training_args.bf16:
+    #             model.to(torch.bfloat16)
+    #         if training_args.fp16:
+    #             model.to(torch.float16)
+    #     rank0_print("Adding LoRA adapters...")
+    #     model = get_peft_model(model, lora_config)
 
     if "mistral" in model_args.model_name_or_path.lower() or "mixtral" in model_args.model_name_or_path.lower() or "zephyr" in model_args.model_name_or_path.lower():
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_args.model_name_or_path, cache_dir=training_args.cache_dir, model_max_length=training_args.model_max_length, padding_side="left")
@@ -1732,16 +1758,12 @@ def train(attn_implementation=None):
                 for name, param in model.named_parameters():
                     if "vision_tower" not in name and "mm_projector" not in name and "vision_resampler" not in name:
                         param.requires_grad_(True)
-            if training_args.lora_enable:
-                print('lora enable attempt:')
-                for name, param in model.named_parameters():
-                    if "lora" in name and "vision_tower" not in name and "mm_projector" not in name and "vision_resampler" not in name:
-                        param.requires_grad_(True)
+            # if training_args.lora_enable:
+            #     print('lora enable attempt:')
+            #     for name, param in model.named_parameters():
+            #         if "lora" in name and "vision_tower" not in name and "mm_projector" not in name and "vision_resampler" not in name:
+            #             param.requires_grad_(True)
 
-        total_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
-        trainable_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters() if p.requires_grad)
-        rank0_print(f"Total parameters: ~{total_params/1e6:.2f} MB)")
-        rank0_print(f"Trainable parameters: ~{trainable_params/1e6:.2f} MB)")
         if training_args.bits in [4, 8]:
             model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
 
@@ -1766,8 +1788,47 @@ def train(attn_implementation=None):
                     if training_args.bf16 and module.weight.dtype == torch.float32:
                         module = module.to(torch.bfloat16)
 
+    if training_args.lora_enable:
+        from peft import LoraConfig, get_peft_model
+
+        lora_config = LoraConfig(
+            r=training_args.lora_r,
+            lora_alpha=training_args.lora_alpha,
+            target_modules=find_all_linear_names(model),
+            lora_dropout=training_args.lora_dropout,
+            bias=training_args.lora_bias,
+            task_type="CAUSAL_LM",
+        )
+        if training_args.bits == 16:
+            if training_args.bf16:
+                model.to(torch.bfloat16)
+            if training_args.fp16:
+                model.to(torch.float16)
+        rank0_print("Adding LoRA adapters...")
+        model = get_peft_model(model, lora_config)
+    
+    if "mm_mlp_adapter" in tunable_parts:
+        for p in model.get_model().mm_projector.parameters():
+            p.requires_grad = True
+    if "mm_vision_tower" in tunable_parts:
+        for name, param in model.named_parameters():
+            if "vision_tower" in name:
+                param.requires_grad_(True)
+    
+    for name, param in model.named_parameters():
+           if param.requires_grad:
+               print(name)
+
+    total_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
+    trainable_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters() if p.requires_grad)
+    rank0_print(f"Total parameters: ~{total_params/1e6:.2f} MB)")
+    rank0_print(f"Trainable parameters: ~{trainable_params/1e6:.2f} MB)")
+
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     trainer = LLaVATrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+
+    # Add custom callback.
+    trainer.add_callback(SaveInterimCallback)
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)

@@ -1,3 +1,10 @@
+# Additional paths.
+work_dirs
+.git
+jsons
+*.slurm
+
+
 # Python
 __pycache__
 *.pyc

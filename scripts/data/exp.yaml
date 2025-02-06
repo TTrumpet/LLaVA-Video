@@ -1,9 +1,9 @@
 datasets:
   - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_next_fit_mix_filtered_text_wild_738590.json
     sampling_strategy: "first:50%"
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_wild_4v_39k.json # not released
+  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_wild_4v_39k.json
     sampling_strategy: "first:10%"
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_wild_4v_12k.json # not released
+  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_wild_4v_12k.json
     sampling_strategy: "first:10%"
   - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/mavis_math_metagen_87358.json
     sampling_strategy: "first:10%"
@@ -13,7 +13,7 @@ datasets:
     sampling_strategy: "all"
   - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/VisualWebInstruct_filtered_263589.json
     sampling_strategy: "all"
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/visual_chat_en_26048_gpt4o_coco_checked.json # not released
+  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/visual_chat_en_26048_gpt4o_coco_checked.json
     sampling_strategy: "all"
   # - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/gpt4o_combinations_51316.json
   #   sampling_strategy: "all"
@@ -173,13 +173,91 @@ datasets:
     sampling_strategy: "first:10%"
   - json_path: /mnt/bn/vl-research/data/llava_instruct/cauldron/websight_10000.json
     sampling_strategy: "first:10%"
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_ofa_DEMON-FULL_filtered_311085.json # released in lmms-lab/M4-Instruct
+  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_ofa_DEMON-FULL_filtered_311085.json
     sampling_strategy: all
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_ofa_mantis-instruct_reformatted.json # released in lmms-lab/M4-Instruct
+  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_ofa_mantis-instruct_reformatted.json
     sampling_strategy: all
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/academic_source_30s_v1_all.json # will be released in next version of LLaVA-NeXT-Video
-    sampling_strategy: all
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/0718_0_30_s_academic_mc_v0_1_all.json # will be released in next version of LLaVA-NeXT-Video
-    sampling_strategy: all
-  - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/sharegpt4video_255000.json # download from sharegpt4video
-    sampling_strategy: all
+  # - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/academic_source_30s_v1_all.json
+  #   sampling_strategy: all
+  # - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/0718_0_30_s_academic_mc_v0_1_all.json
+  #   sampling_strategy: all
+  # - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/sharegpt4video_255000.json
+  #   sampling_strategy: all
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_academic_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_youtube_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_academic_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_youtube_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_academic_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_youtube_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_academic_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_academic_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_youtube_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_youtube_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_activitynetqa_oe_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_nextqa_oe_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_nextqa_mc_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/0_30_s_perceptiontest_mc_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_academic_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_academic_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_youtube_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_youtube_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_activitynetqa_oe_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_nextqa_oe_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_nextqa_mc_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/30_60_s_perceptiontest_mc_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_academic_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_academic_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_youtube_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_youtube_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_activitynetqa_oe_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_nextqa_oe_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/1_2_m_nextqa_mc_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/sharegptvideo_qa_255k.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_academic_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_youtube_v0_1_cap.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_academic_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_academic_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_youtube_oe_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_youtube_mc_v0_1_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_nextqa_oe_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_nextqa_mc_qa.json
+    sampling_strategy: "all"
+  - json_path: /mnt/bn/tiktok-mm-3/aiic/users/wujinming/_training_data/jsons/tos/2_3_m_activitynetqa_oe_qa.json
+    sampling_strategy: "all"

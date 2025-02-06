@@ -8,6 +8,7 @@ from PIL import Image
 import requests
 import copy
 import cv2
+import os
 import torch
 import sys
 import warnings
@@ -60,18 +61,22 @@ def load_video(video_path, max_frames_num,fps=1,force_sample=False):
     frame_idx = [i for i in range(0, len(vr), fps)]
     frame_time = [i/fps for i in frame_idx]
     if len(frame_idx) > max_frames_num or force_sample:
-        sample_fps = max_frames_num
-        uniform_sampled_frames = np.linspace(0, total_frame_num - 1, sample_fps, dtype=int)
-        frame_idx = uniform_sampled_frames.tolist()
-        frame_time = [i/vr.get_avg_fps() for i in frame_idx]
+        # sample_fps = max_frames_num
+        # uniform_sampled_frames = np.linspace(0, total_frame_num - 1, sample_fps, dtype=int)
+        # frame_idx = uniform_sampled_frames.tolist()
+        # frame_time = [i/vr.get_avg_fps() for i in frame_idx]
+        start_idx = np.random.randint(0, len(frame_idx) - max_frames_num)
+        frame_idx = frame_idx[start_idx:start_idx + max_frames_num]
+        frame_time = frame_time[start_idx:start_idx + max_frames_num]
+
     frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
     spare_frames = vr.get_batch(frame_idx).asnumpy()
     # import pdb;pdb.set_trace()
     return spare_frames,frame_time,video_time
 
-def load_model(pretrained, model_name, device, device_map):
+def load_model(pretrained, model_name, model_base, device, device_map):
     overwrite_config = {'tie_word_embeddings': False, 'use_cache': True, "vocab_size": 152064} if '7B' in model_name else None
-    tokenizer, model, image_processor, max_length = load_pretrained_model(pretrained, None, model_name, load_4bit=False, torch_dtype="bfloat16", device_map=device_map, overwrite_config=overwrite_config)  # Add any other thing you want to pass in llava_model_args
+    tokenizer, model, image_processor, max_length = load_pretrained_model(pretrained, model_base, model_name, load_4bit=False, torch_dtype="bfloat16", device_map=device_map, overwrite_config=overwrite_config)  # Add any other thing you want to pass in llava_model_args
     model.eval()
     # model = model.to(torch.bfloat16)
     return tokenizer, model, image_processor, max_length
@@ -84,22 +89,44 @@ def generate(model, input_ids, video):
             modalities= ["video"],
             do_sample=False,
             temperature=0,
-            #max_new_tokens=4096,
             max_new_tokens=36000,
-            )
+        )
     return cont
 
 def main(split, pretrained):
 
     # initialize model
-    #pretrained = "/lustre/fs1/home/ttran/CAP/LLaVA-Video/work_dirs/llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_elysium/checkpoint-500/"
-    pretrained = "/home/jfioresi/vlm/LLaVA-Video/work_dirs/llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_shikra"
-    model_name = "llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_vidshikra"
-    model_name_short = pretrained[pretrained.index("video") + 6 :]
+    # pretrained = "/home/jfioresi/vlm/LLaVA-Video/work_dirs/llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_elysium_100K_lora_4gpu"
+    pretrained = "/home/jfioresi/vlm/LLaVA-Video/work_dirs/llavavideo-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-elysium_100K_lora_a1"
+    model_name = os.path.basename(pretrained)
+    # model_name = "lmms-lab/LLaVA-Video-7B-Qwen2"
+    # model_name_short = pretrained[pretrained.index("video") + 6 :]
+    model_base = "lmms-lab/LLaVA-Video-7B-Qwen2"
     device = "cuda"
     device_map = "auto"
-    max_frames_num = 64
-    tokenizer, model, image_processor, max_length = load_model(pretrained, model_name, device, device_map)
+    max_frames_num = 8
+    tokenizer, model, image_processor, max_length = load_model(pretrained, model_name, model_base, device, device_map)
+    
+    # _, model_orig, _, _ = load_model(model_base, model_base, None, device, device_map)
+
+    # # Get the new state_dict.
+    # state = model.state_dict()
+    # state_orig = model_orig.state_dict()
+
+    # change = False
+    # # Compare each parameter.
+    # for name in state:
+    #     # It's important to use `torch.allclose` for floating point tensors.
+    #         if torch.allclose(state[name], state_orig[name]):
+    #             pass
+    #             # print(f"Parameter '{name}' did NOT change.")
+    #         else:
+    #             change = True
+    #             diff = (state_orig[name] - state[name]).abs().sum()
+    #             print(f"Parameter '{name}' CHANGED. Sum of absolute differences: {diff.item()}")
+    # 
+    # if change == False:
+    #     print('NOTHING HAS CHANGED')
 
     # read v_shikra test set json
     data = None
@@ -134,7 +161,7 @@ def main(split, pretrained):
         input_ids = tokenizer_image_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
         cont = generate(model, input_ids, video)
         text_outputs = tokenizer.batch_decode(cont, skip_special_tokens=True)[0].strip()
-
+        print(text_outputs)
         output = text_outputs[text_outputs.index("{"):text_outputs.index("}") + 1]
         frames = ast.literal_eval(output)
         
