@@ -1,0 +1,5 @@
+datasets:
+  - json_path: /lustre/fs1/home/ttran/CAP/datasets/VTimeLLM/conv_vtimellm_stage2.json
+    sampling_strategy: "all"
+    #- json_path: /lustre/fs1/home/ttran/CAP/datasets/VTimeLLM/conv_stage3.json
+    #sampling_strategy: "all"
