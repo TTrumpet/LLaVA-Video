@@ -3,7 +3,7 @@ module load cuda/cuda-11.8.0
 
 # Set up the data folders
 IMAGE_FOLDER="X"
-VIDEO_FOLDER="/home/jfioresi/datasets/vtimellm/videos" # "/datasets/WebVid/data/videos"
+VIDEO_FOLDER="/home/jfioresi/datasets/vtimellm/videos"
 DATA_YAML="scripts/data/vtimellm.yaml" # e.g exp.yaml
 
 nvidia-smi
