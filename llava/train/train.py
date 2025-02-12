@@ -426,17 +426,19 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
             replace_token = DEFAULT_IMAGE_TOKEN #if '<video>' not in sentence["value"] else '<video>'
             if data_args.mm_use_im_start_end:
                 replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
-            sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token).replace('<video>', '')
+            sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token).replace('<video>\n', 'track the ')
 
             # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
             sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
 
-            print("Preprocessing Dataset...")
+            # print("Preprocessing Dataset...")
             if 'Elysium' in data_args.dataset_paths[0]:
                 bbox_list = data_args.meta['bboxes']
                 bbox_list = bbox_list[data_args.start_idx:data_args.start_idx + len(data_args.frame_idx)]
                 normalize_frame_to_bbox = {}
-                all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
+                # all_norm_fid = [convert(data_args.frame_idx[-1], x, len(data_args.frame_idx)) for x in data_args.frame_idx]
+                # all_norm_fid = [convert(data_args.duration, x, data_args.duration) for x in data_args.frame_idx]
+                all_norm_fid = list(range(data_args.start_idx, data_args.start_idx + len(data_args.frame_idx)))
                 for idx, norm_fid in enumerate(all_norm_fid):
                     normalize_frame_to_bbox[int(norm_fid)] = normalize_bbox(bbox_list[idx], 1, 1)
                 bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
@@ -460,8 +462,8 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                     normalize_frame_to_bbox[int(norm_fid)] = data_args.meta['bboxes'][str(fid)]
                 bbox_string = re.sub(r'\s+', '', str(normalize_frame_to_bbox))
                 sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
-            elif 'VTimeLLM' in data_args.dataset_paths[0]:
-                rank0_print("Preprocessing VTimeLLM...")
+            elif 'vtimellm' in data_args.dataset_paths[0]:
+                # rank0_print("Preprocessing VTimeLLM...")
                 # Replace the tokens with frame ids
                 replace_set = []
                 for k, v in data_args.meta['token'].items():
@@ -1235,7 +1237,6 @@ class LazySupervisedDataset(Dataset):
         if isinstance(i, int):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
-
         if "image" in sources[0]:
             image_file = self.list_data_dict[i]["image"]
             if type(image_file) is list:
@@ -1290,7 +1291,7 @@ class LazySupervisedDataset(Dataset):
                         except IOError:
                             print(f"Failed to read frame at path: {frame_path}")
                 else:
-                    video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx = process_video_with_decord_fps(video_file, self.data_args)
+                    video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration = process_video_with_decord_fps(video_file, self.data_args)
                     # video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
 
                 processor = self.data_args.image_processor
@@ -1301,6 +1302,7 @@ class LazySupervisedDataset(Dataset):
                 #     conv_value = process_bbox(conv_value, self.data_args)
                 self.data_args.frame_idx = frame_idx
                 self.data_args.start_idx = start_idx
+                self.data_args.duration = duration
                 try:
                     self.data_args.meta = sources[0]["meta"]
                 except:
@@ -1317,6 +1319,7 @@ class LazySupervisedDataset(Dataset):
                 return self._get_item(i + 1)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
+        # print(sources)
         has_image = ("image" in self.list_data_dict[i]) or ("video" in self.list_data_dict[i])
         data_dict = preprocess(sources, self.tokenizer, has_image=has_image)
 

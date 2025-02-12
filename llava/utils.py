@@ -30,6 +30,7 @@ def process_video_with_decord_fps(video_file, data_args):
     avg_fps = round(vr.get_avg_fps() / data_args.video_fps)
     frame_idx = [i for i in range(0, total_frame_num, avg_fps)]
     frame_time = [i/avg_fps for i in frame_idx]
+    duration = len(frame_idx)
 
     start_idx = 0
     if data_args.frames_upbound > 0:
@@ -48,7 +49,7 @@ def process_video_with_decord_fps(video_file, data_args):
     num_frames_to_sample = num_frames = len(frame_idx)
     # https://github.com/dmlc/decord/issues/208
     vr.seek(0)
-    return video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx
+    return video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration
 
 
 def process_video_with_decord(video_file, data_args):
