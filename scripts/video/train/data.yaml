@@ -1,3 +1,0 @@
-datasets:
-  - json_path: /datasets/VideoGPT/annotations/vcg-plus_112K.json
-    sampling_strategy: "first:1%"

@@ -1,47 +1,27 @@
 #!/bin/bash
+module load cuda/cuda-11.8.0
 
 # Set up the data folder
-IMAGE_FOLDER="XXX"
-VIDEO_FOLDER="/datasets/vidor"
-DATA_YAML="scripts/video/train/vid_shikra_data.yaml" # e.g exp.yaml
+IMAGE_FOLDER="X"
+VIDEO_FOLDER="/datasets/LLaVA-Video-178K"
+DATA_YAML="scripts/data/data_full.yaml"
 
-############### Prepare Envs #################
-# python3 -m pip install flash-attn --no-build-isolation
-# alias python=python3
-############### Show Envs ####################
-
-nvidia-smi
-
-################ Arnold Jobs ################
-
-LLM_VERSION="Qwen/Qwen2.5-3B"
+LLM_VERSION="Qwen/Qwen2-7B-Instruct"
 LLM_VERSION_CLEAN="${LLM_VERSION//\//_}"
 VISION_MODEL_VERSION="google/siglip-so400m-patch14-384"
 VISION_MODEL_VERSION_CLEAN="${VISION_MODEL_VERSION//\//_}"
 
-#
-
-BASE_RUN_NAME="llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-mlp2x_gelu-pretrain_blip558k_plain"
-echo "BASE_RUN_NAME: ${BASE_RUN_NAME}"
-
 # Stage 2
 PROMPT_VERSION="qwen_1_5"
-MID_RUN_NAME="llavanext-${VISION_MODEL_VERSION_CLEAN}-${LLM_VERSION_CLEAN}-ov_to_video_vidshikra_100_scratch"
-PREV_STAGE_CHECKPOINT="Qwen/Qwen2.5-3B"
-#PREV_STAGE_CHECKPOINT="lmms-lab/llava-onevision-qwen2-3.0b-si"
-#PREV_STAGE_CHECKPOINT="work_dirs/llavanext-${VISION_MODEL_VERSION_CLEAN}-${LLM_VERSION_CLEAN}-ov_to_video_elysium/checkpoint-500/"
-
-#VISION_MODEL_VERSION="work_dirs/llavanext-${VISION_MODEL_VERSION_CLEAN}-${LLM_VERSION_CLEAN}-ov_to_video_elysium"
-#VISION_MODEL_VERSION_CLEAN="${VISION_MODEL_VERSION//\//_}"
-
+MID_RUN_NAME="llavavideo-${VISION_MODEL_VERSION_CLEAN}-${LLM_VERSION_CLEAN}-ov_to_video_baseline_lora_a1"
+PREV_STAGE_CHECKPOINT="lmms-lab/llava-onevision-qwen2-7b-si"
 echo "PREV_STAGE_CHECKPOINT: ${PREV_STAGE_CHECKPOINT}"
 echo "MID_RUN_NAME: ${MID_RUN_NAME}"
 
-
-# ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${ARNOLD_WORKER_GPU}" --nnodes="${ARNOLD_WORKER_NUM}" --node_rank="${ARNOLD_ID}" --master_addr="${METIS_WORKER_0_HOST}" --master_port="${port_in_cmd}" \
-deepspeed --master_port 30000 \
-    llava/train/train_mem.py \
+    # --lora_enable True --lora_r 128 --lora_alpha 256 \
+/home/jfioresi/miniforge3/envs/llava/bin/deepspeed --master_port 30000 llava/train/train_mem.py \
     --deepspeed scripts/zero3.json \
+    --lora_enable True --lora_r 128 --lora_alpha 256 \
     --model_name_or_path $PREV_STAGE_CHECKPOINT \
     --version $PROMPT_VERSION \
     --data_path $DATA_YAML \
@@ -67,7 +47,7 @@ deepspeed --master_port 30000 \
     --gradient_accumulation_steps 2 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
-    --save_steps 500 \
+    --save_steps 1000 \
     --save_total_limit 1 \
     --learning_rate 1e-5 \
     --weight_decay 0. \
@@ -83,7 +63,7 @@ deepspeed --master_port 30000 \
     --torch_compile True \
     --torch_compile_backend "inductor" \
     --dataloader_drop_last True \
-    --frames_upbound 100 \
+    --frames_upbound 64 \
     --mm_newline_position grid \
     --add_time_instruction True \
     --force_sample True \

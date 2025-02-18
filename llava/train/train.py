@@ -1291,8 +1291,8 @@ class LazySupervisedDataset(Dataset):
                         except IOError:
                             print(f"Failed to read frame at path: {frame_path}")
                 else:
-                    video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration = process_video_with_decord_fps(video_file, self.data_args)
-                    # video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
+                    # video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration = process_video_with_decord_fps(video_file, self.data_args)
+                    video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
 
                 processor = self.data_args.image_processor
                 image = processor.preprocess(video, return_tensors="pt")["pixel_values"]
@@ -1300,16 +1300,16 @@ class LazySupervisedDataset(Dataset):
                 # if isinstance(conv_value, list):
                 #     print(self.data_args)
                 #     conv_value = process_bbox(conv_value, self.data_args)
-                self.data_args.frame_idx = frame_idx
-                self.data_args.start_idx = start_idx
-                self.data_args.duration = duration
-                try:
-                    self.data_args.meta = sources[0]["meta"]
-                except:
-                    pass
+                # self.data_args.frame_idx = frame_idx
+                # self.data_args.start_idx = start_idx
+                # self.data_args.duration = duration
+                # try:
+                #     self.data_args.meta = sources[0]["meta"]
+                # except:
+                #     pass
                 if self.data_args.add_time_instruction:
                     # Removed "uniformly" from the instruction.
-                    time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
+                    time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
                     sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{time_instruciton}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
                 image = [(image, video[0].size, "video")]
                 sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)

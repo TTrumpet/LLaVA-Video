@@ -57,7 +57,8 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             )
         if "lora" in model_name.lower() and model_base is not None:
             lora_cfg_pretrained = AutoConfig.from_pretrained(model_path)
-            tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+            # tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+            tokenizer = AutoTokenizer.from_pretrained("lmms-lab/LLaVA-Video-7B-Qwen2", use_fast=False)
             rank0_print("Loading LLaVA from base model...")
             if "mixtral" in model_name.lower():
                 from llava.model.language_model.llava_mixtral import LlavaMixtralConfig
@@ -84,10 +85,10 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                     rank0_print(f"Overwriting config with {overwrite_config}")
                     for k, v in overwrite_config.items():
                         setattr(llava_cfg, k, v)
-
-                    model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+                    print(model_base)
+                    model = LlavaQwenForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
                 else:
-                    model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
+                    model = LlavaQwenForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
             else:
                 from llava.model.language_model.llava_llama import LlavaConfig
 
@@ -116,32 +117,32 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             if any(k.startswith("model.model.") for k in non_lora_trainables):
                 non_lora_trainables = {(k[6:] if k.startswith("model.") else k): v for k, v in non_lora_trainables.items()}
 
-            print(non_lora_trainables.keys())
-            import copy
+            # print(non_lora_trainables.keys())
+            # import copy
 
-            # Make a deep copy of the model's current state_dict.
-            old_state = copy.deepcopy(model.state_dict())
+            # # Make a deep copy of the model's current state_dict.
+            # old_state = copy.deepcopy(model.state_dict())
             
-            # Load the new weights.
-            msg = model.load_state_dict(non_lora_trainables, strict=False)
-            # print('unexpected', msg.unexpected_keys)
-            # print([n for n, _ in model.named_parameters()])
-            missing = [n for n in list(non_lora_trainables.keys()) if n in msg.unexpected_keys]
-            print(len(list(non_lora_trainables.keys())), len(missing), len(msg.unexpected_keys))
-            # Get the new state_dict.
-            new_state = model.state_dict()
+            # # Load the new weights.
+            # msg = model.load_state_dict(non_lora_trainables, strict=False)
+            # # print('unexpected', msg.unexpected_keys)
+            # # print([n for n, _ in model.named_parameters()])
+            # missing = [n for n in list(non_lora_trainables.keys()) if n in msg.unexpected_keys]
+            # print(len(list(non_lora_trainables.keys())), len(missing), len(msg.unexpected_keys))
+            # # Get the new state_dict.
+            # new_state = model.state_dict()
            
-            change = False
-            # Compare each parameter.
-            for name in old_state:
-                # It's important to use `torch.allclose` for floating point tensors.
-                if torch.allclose(old_state[name], new_state[name]):
-                    pass
-                    # print(f"Parameter '{name}' did NOT change.")
-                else:
-                    change = True
-                    diff = (old_state[name] - new_state[name]).abs().sum()
-                    print(f"Parameter '{name}' CHANGED. Sum of absolute differences: {diff.item()}")
+            # change = False
+            # # Compare each parameter.
+            # for name in old_state:
+            #     # It's important to use `torch.allclose` for floating point tensors.
+            #     if torch.allclose(old_state[name], new_state[name]):
+            #         pass
+            #         # print(f"Parameter '{name}' did NOT change.")
+            #     else:
+            #         change = True
+            #         diff = (old_state[name] - new_state[name]).abs().sum()
+            #         print(f"Parameter '{name}' CHANGED. Sum of absolute differences: {diff.item()}")
             model.load_state_dict(non_lora_trainables, strict=False)
             from peft import PeftModel
             
@@ -153,8 +154,8 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             rank0_print("Merging LoRA weights...")
             model = model.merge_and_unload()
             rank0_print("Model is loaded...")
-            # model._hf_peft_config_loaded = False
 
+            # model._hf_peft_config_loaded = False
             # output_path = os.path.join(model_path, "merged_model")
             # print(f"Saving merged model to {output_path}...")
             # model.save_pretrained(output_path)
