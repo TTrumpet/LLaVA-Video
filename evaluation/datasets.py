@@ -1,3 +1,4 @@
+from csv import DictReader
 import cv2
 import json
 import numpy as np
@@ -12,6 +13,12 @@ from torch.utils.data import Dataset
 
 from decord import VideoReader, cpu
 
+def negative_check(num_list):
+    n = [num for num in num_list if num < 0]
+    if len(n) == 0:
+        return True
+    return False
+
 # Convert nested bbox and labels in dictionary 
 # to correct format for IoU calculation.
 def nested_dict_to_list(given_dict):
@@ -21,11 +28,13 @@ def nested_dict_to_list(given_dict):
         new_bbox = []
         for num in bbox.values():
             new_bbox.append(num)
+        #assert(negative_check(new_bbox))
         boxes.append(new_bbox)
             
     labels = []
     for label in given_dict.keys():
         labels.append(int(label))
+    #assert(negative_check(labels))
     
     return boxes, labels
 
@@ -35,11 +44,13 @@ def dict_to_list(given_dict):
     
     boxes = []
     for bbox in given_dict.values():
+        #assert(negative_check(bbox))
         boxes.append(bbox)
             
     labels = []
     for label in given_dict.keys():
         labels.append(int(label))
+    #assert(negative_check(labels))
     
     return boxes, labels
 
@@ -93,6 +104,13 @@ def load_video(video_path, max_frames_num,fps=1,force_sample=False):
     spare_frames = vr.get_batch(frame_idx).asnumpy()
     # import pdb;pdb.set_trace()
     return spare_frames,frame_time,video_time
+
+def final_iou(iou_dict):
+    iou = 0
+    for t in iou_dict.values():
+        iou += t
+    iou = iou / len(iou_dict)
+    return iou
 
 
 class ShikraVideoDataset(Dataset):
@@ -155,8 +173,6 @@ class ShikraVideoDataset(Dataset):
         for sentence in data_item['conversations']:
             sentence["value"] = sentence["value"].replace('<bboxes>', bbox_string)
         
-        print(data_item['conversations'])
-        
         # save values to use in iou calculation
         self.bboxes = data_item['meta']['bboxes']
         self.vid = data_item['id']
@@ -167,7 +183,7 @@ class ShikraVideoDataset(Dataset):
             'bboxes': data_item['meta']['bboxes']
             }
         
-    def calculate_iou(self, gen_frames, question_index):
+    def calculate_iou(self, gen_frames, question_index=None):
         assert isinstance(gen_frames, dict)
         boxes, labels = dict_to_list(gen_frames)  
               
@@ -193,10 +209,10 @@ class ShikraVideoDataset(Dataset):
         self.iou[self.vid] = iou['iou']
             
         return iou
-        
+    
 
 class VidSTGDataset(Dataset):
-    def __init__(self, dataset_path, video_path, split, image_processor, max_frames=8, video_processor=None, vidor_anno_path="/lustre/fs1/home/ttran/CAP/datasets/VidSTG-Dataset/validation/"):
+    def __init__(self, dataset_path, video_path, split, image_processor, max_frames=8, video_processor=None, vidor_anno_path=None):
         self.dataset_path = dataset_path
         self.vidor_anno_path = vidor_anno_path
         self.video_path = video_path
@@ -228,6 +244,7 @@ class VidSTGDataset(Dataset):
         data_item = self.db[idx]
         
         # Search VidOR annotations for video path
+        # TODO: move this to load_dataset
         vidor_filename = None
         for path, folders, files in os.walk(self.vidor_anno_path):
             for filename in files:
@@ -301,8 +318,7 @@ class VidSTGDataset(Dataset):
 
     def calculate_iou(self, gen_frames, question_index):
         assert isinstance(gen_frames, dict)
-        boxes, labels = nested_dict_to_list(gen_frames)       
-        
+        boxes, labels = nested_dict_to_list(gen_frames)
         preds = [
             {
                 "boxes": torch.tensor(boxes),
@@ -344,44 +360,190 @@ class HCSTVGDataset(Dataset):
         with open(self.dataset_path, 'r') as f:
             db_file = json.load(f)
             self.len = len(db_file)
-            print(db_file)
-            exit()
+            
+            db_list = []
+            for vid, val in db_file.items():
+                # get path to video
+                for path, folders, files in os.walk(self.video_path):
+                    for filename in files:
+                        if filename == vid:
+                            video_path = path
+                val['video_path'] = os.path.join(video_path, vid)
+                val['vid'] = vid.replace('.mp4', '')
+                db_list.append(val)
+            
+            return db_list
             
     def __len__(self):
         return self.len
     
     def __getitem__(self, idx):
         data_item = self.db[idx]
+        video_path = data_item['video_path']
         
-    def calculate_iou(self, gen_frames):
-        pass
+        # create video tensor
+        video, frame_time, video_time = load_video(video_path, self.max_frames, fps=1, force_sample=True)
+        video = self.image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda().bfloat16()
+        video = [video]
+        
+        bbox_dict = {}
+        # convert to {frame_id: [bboxes], ...} format
+        # convert [x, y, w, h] -> [x1, y1, x2, y2] format
+        counter = 0
+
+        for frame in range(data_item['st_frame'], data_item['ed_frame']):
+            tmp_bbox = data_item['bbox'][counter]
+            tmp_bbox = [tmp_bbox[0], tmp_bbox[1], tmp_bbox[0] + tmp_bbox[2], tmp_bbox[1] + tmp_bbox[3]]
+            bbox_dict[frame] = tmp_bbox
+            counter += 1
+        
+        # save values to use in iou calculation
+        self.bboxes = bbox_dict
+        self.vid = data_item['vid']
+        
+        return {
+                "video": video,
+                "question": data_item['English'],
+                "bboxes": bbox_dict, 
+            }
+        
+    def calculate_iou(self, gen_frames, question_index=None):
+        #boxes, labels = dict_to_list(gen_frames)
+        boxes, labels = dict_to_list(self.bboxes)
+        preds = [
+            {
+                "boxes": torch.tensor(boxes),
+                "labels": torch.tensor(labels),
+            }
+        ]
+        
+        boxes, labels = dict_to_list(self.bboxes)
+        target = [
+            {
+                "boxes": torch.tensor(boxes),
+                "labels": torch.tensor(labels)
+            }
+        ]
+            
+        metric = IntersectionOverUnion()
+        iou = metric(preds, target)
+        self.iou[self.vid] = iou['iou']
+            
+        return iou
         
         
 class NExTVideoDataset(Dataset):
-    def __init__(self, dataset_path, video_path, split, image_processor, max_frames=8, video_processor=None):
+    def __init__(self, dataset_path, video_path, split, image_processor, max_frames=8, video_processor=None, map_id_to_path_file=None, test_qa_file=None, test_qa=False):
         self.dataset_path = dataset_path
         self.video_path = video_path
+        self.id_map_path = map_id_to_path_file
+        self.test_qa_path = test_qa_file
+        self.test_qa = test_qa
         self.db = self.load_dataset()
         self.split = split
         self.max_frames = max_frames
         self.image_processor = image_processor
         self.video_processor = video_processor
+        self.vid = None
+        self.gt_ground = None
         self.iou = {}
+        self.qa_accuracy = 0
     
     def load_dataset(self):
         if not os.path.isfile(self.dataset_path):
             raise FileNotFoundError(f'No such file: {self.dataset_path}')
+        if not os.path.isfile(self.id_map_path):
+            raise FileNotFoundError(f'No such file: {self.id_map_path}')
+        if not os.path.isfile(self.test_qa_path):
+            raise FileNotFoundError(f'No such file: {self.test_qa_path}')
         with open(self.dataset_path, 'r') as f:
-            db_file = json.load(f)
-            self.len = len(db_file)
-            print(db_file)
-            exit()
+            gsub_file = json.load(f)
+            self.len = len(gsub_file)
+        with open(self.id_map_path, 'r') as f:
+            id_map_file = json.load(f)
+        with open(self.test_qa_path, 'r') as f:
+            dict_reader = DictReader(f)
+            qa_file = list(dict_reader)
+        
+        db_list = []
+        for video in qa_file:
+            # map video id (qa csv) to video path (id map)
+            video_id = video['video_id']
+            video['video_path'] = os.path.join(self.video_path, id_map_file[video_id]+".mp4")
+            # map video id (qa csv) to temporal boundings
+            tmp_gsub = gsub_file[video_id]
+            # map qid (qa csv) to time interval (gsub json)
+            qid = video['qid']
+            video['gsub'] = {
+                    "duration": tmp_gsub["duration"],
+                    "location": tmp_gsub["location"][str(qid)]
+                }
+            db_list.append(video)
+
+        return db_list
             
     def __len__(self):
         return self.len
     
     def __getitem__(self, idx):
         data_item = self.db[idx]
+        video_path = data_item['video_path']
         
-    def calculate_iou(self, gen_frames):
+        # create video tensor
+        video, frame_time, video_time = load_video(video_path, self.max_frames, fps=1, force_sample=True)
+        video = self.image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda().bfloat16()
+        video = [video]
+
+        # Save variables to be used in iou calculation
+        self.gt_ground = data_item['gsub']['location']
+        self.vid = data_item['qid']
+        
+        return {
+                "video": video,
+                "question": data_item['question'],
+                "duration": data_item['gsub']['location'], 
+            }
+        
+    def get_tIoU(self, loc, span):
+
+        if span[0] == span[-1]:
+            if loc[0] <= span[0] and span[0] <= loc[1]:
+                return 0, 1
+            else:
+                return 0, 0
+
+        span_u =  (min(loc[0], span[0]), max(loc[-1], span[-1]))
+        span_i = (max(loc[0], span[0]), min(loc[-1], span[-1]))
+        dis_i = (span_i[1] - span_i[0])
+        if span_u[1] > span_u[0]:
+            IoU = dis_i / (span_u[1] - span_u[0])
+        else:
+            IoU = 0.0
+        if span[-1] > span[0]:
+            IoP = dis_i / (span[-1] - span[0])
+        else:
+            IoP = 0.0
+
+        return IoU, IoP
+
+    # Assumes input gt_ground: [[x,y]], pred_ground: [x,y]
+    # technically tIoU
+    def eval_ground(self, gt_ground, pred_ground):      
+        span = pred_ground
+        tIoU, tIoP = self.get_tIoU(gt_ground[0], span)
+        self.iou[self.vid] = IoU
+        return tIoU
+
+    def calculate_iou(self, gen_ground, question_index=None):
+        return self.eval_ground(self.gt_ground, gen_ground)
+
+    def evaluate_qa(self, gen_response):
         pass
+        
+        # strip bboxes if necessary
+        
+        # pass to llm to eval
+        
+        # add to self.qa_accuracy
+        
+        
