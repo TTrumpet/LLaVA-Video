@@ -82,7 +82,7 @@ def unnormalize_bbox(bbox, width, height):
     return [xmin, ymin, xmax, ymax]
 
 
-def load_video(video_path, max_frames_num,fps=1,force_sample=False):
+def load_video(video_path, max_frames_num,fps=1, force_sample=False):
     if max_frames_num == 0:
         return np.zeros((1, 336, 336, 3))
     vr = VideoReader(video_path, ctx=cpu(0),num_threads=1)
@@ -91,7 +91,7 @@ def load_video(video_path, max_frames_num,fps=1,force_sample=False):
     fps = round(vr.get_avg_fps()/fps)
     frame_idx = [i for i in range(0, len(vr), fps)]
     frame_time = [i/fps for i in frame_idx]
-    if len(frame_idx) > max_frames_num or force_sample:
+    if len(frame_idx) > max_frames_num: # or force_sample:
         # sample_fps = max_frames_num
         # uniform_sampled_frames = np.linspace(0, total_frame_num - 1, sample_fps, dtype=int)
         # frame_idx = uniform_sampled_frames.tolist()
@@ -491,6 +491,8 @@ class NExTVideoDataset(Dataset):
         
         # create video tensor
         video, frame_time, video_time = load_video(video_path, self.max_frames, fps=1, force_sample=True)
+        # print(len(video), frame_time, video_time)
+        # print(data_item['gsub']['location'])
         video = self.image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda().bfloat16()
         video = [video]
 
@@ -502,6 +504,9 @@ class NExTVideoDataset(Dataset):
                 "video": video,
                 "question": data_item['question'],
                 "duration": data_item['gsub']['location'], 
+                "video_path": data_item['video_path'],
+                "frame_time": frame_time,
+                "video_time": video_time
             }
         
     def get_tIoU(self, loc, span):
