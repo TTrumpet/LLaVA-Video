@@ -517,6 +517,8 @@ class NExTVideoDataset(Dataset):
                     "duration": tmp_gsub["duration"],
                     "location": tmp_gsub["location"][str(qid)]
                 }
+            video['answers'] = [video['a0'], video['a1'], video['a2'], video['a3'], video['a4']]
+            video['answer_idx'] = video['answers'].index(video['answer'])
             db_list.append(video)
 
         return db_list
@@ -538,6 +540,10 @@ class NExTVideoDataset(Dataset):
         # Save variables to be used in iou calculation
         self.gt_ground = data_item['gsub']['location']
         self.vid = data_item['qid']
+        
+        # QA testing
+        answer = data_item['answers'][int(data_item['answer_idx'])]
+        self.qa_correct = {data_item['answer_idx']: answer}
         
         return {
                 "video": video,
@@ -582,13 +588,15 @@ class NExTVideoDataset(Dataset):
         return self.eval_ground(self.gt_ground, gen_ground)
 
     def evaluate_qa(self, gen_response):
-        pass
-        
-        # strip bboxes if necessary
-        
-        # pass to llm to eval
-        
-        # add to self.qa_accuracy
+        print(self.qa_correct)
+        for idx, val in self.qa_correct.items():
+            if idx in gen_response or 'a'+str(idx) in gen_response or val in gen_response:
+                self.qa_accuracy += 1
+                return True
+            elif re.sub(r'[^\w\s]', '', val) in gen_response:
+                self.qa_accuracy += 1
+                return True
+            return False
         
         
 class TVQAPlusDataset(Dataset):
@@ -637,8 +645,8 @@ class TVQAPlusDataset(Dataset):
         total_normalize_frame_to_bbox = {}
         
         # get objects in answer
-        answers = [data_item['a0'], data_item['a1'], data_item['a2'], data_item['a3']]
-        answer = answers[int(data_item['answer_idx']) - 1]
+        answers = [data_item['a0'], data_item['a1'], data_item['a2'], data_item['a3'], data_item['a4']]
+        answer = answers[int(data_item['answer_idx'])]
 
         for l, val in data_item['bbox'].items():
             if len(val) == 0:

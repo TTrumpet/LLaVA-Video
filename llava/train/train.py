@@ -488,7 +488,7 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                         continue
 
                     # get objects in answer
-                    answer = data_args.meta['answers'][int(data_args.meta['answer_idx']) - 1]
+                    answer = data_args.meta['answers'][int(data_args.meta['answer_idx'])]
                     
 
                     normalize_frame_to_bbox = {}
