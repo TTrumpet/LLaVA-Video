@@ -46,7 +46,7 @@ from llava.train.llava_trainer import LLaVATrainer
 from llava import conversation as conversation_lib
 from llava.model import *
 from llava.mm_utils import process_highres_image, process_anyres_image, process_highres_image_crop_split, tokenizer_image_token
-from llava.utils import rank0_print, process_video_with_pyav, process_video_with_decord, process_video_with_decord_fps
+from llava.utils import rank0_print, process_video_with_pyav, process_video_with_decord, process_video_with_decord_fps, process_zip_path_video_frames
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -470,34 +470,65 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                     replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
                 for x1, x2 in replace_set:
                     sentence["value"] = sentence["value"].replace(x1, x2)
+                print(sentence)
             elif "tvqa_plus" in data_args.dataset_paths[0]:
-                rank0_print("Preprocessing TVQA+...")
+                #print("Preprocessing TVQA+...")
                 # Replace the tokens with frame ids
                 # TODO: multiple bounding boxes, boxes outside of temporal interval
                 replace_set = []
                 for k, v in data_args.meta['token'].items():
                     if k == '<bbox>':
                         continue
-                    replace_set.append(k, v)
+                    replace_set.append((k, v))
                 
-                normalize_frame_to_bbox = {}
+                total_normalize_frame_to_bbox = {}
                 for l, val in data_args.meta['token']['<bbox>'].items():
+                    
                     if len(val) == 0:
                         continue
-                    if l < data_args.meta['token']['<t0>'] or l > data_args.meta['token']['<t1>']:
-                        continue
-                    bbox = val[0]
-                    xmin = bbox['top'] - bbox['height']
-                    xmax = bbox['top']
-                    ymin = bbox['left']
-                    ymax = bbox['left'] + bbox['width']
-                    normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
-                    replace_set.append(k, normalize_frame_to_bbox)
+
+                    # get objects in answer
+                    answer = data_args.meta['answers'][int(data_args.meta['answer_idx']) - 1]
+                    
+
+                    normalize_frame_to_bbox = {}
+                    for bbox in val:
+                        if bbox['label'] in answer:
+                            xmin = bbox['left']
+                            xmax = bbox['left'] + bbox['width']
+                            ymin = bbox['top']
+                            ymax = bbox['top'] + bbox['height']
+                            normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
+                            if bbox['label'] in total_normalize_frame_to_bbox:
+                                total_normalize_frame_to_bbox[bbox['label']][l] = [xmin, ymin, xmax, ymax]
+                            else:
+                                total_normalize_frame_to_bbox[bbox['label']] = normalize_frame_to_bbox
+
+                # if empty, just put any bboxes                
+                if len(total_normalize_frame_to_bbox) == 0:
+                    for l, val in data_args.meta['token']['<bbox>'].items():
+                        if len(val) == 0:
+                            continue
+
+                        normalize_frame_to_bbox = {}
+                        for bbox in val:
+                            xmin = bbox['left']
+                            xmax = bbox['left'] + bbox['width']
+                            ymin = bbox['top']
+                            ymax = bbox['top'] + bbox['height']
+                            normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
+                            if bbox['label'] in total_normalize_frame_to_bbox:
+                                total_normalize_frame_to_bbox[bbox['label']][l] = [xmin, ymin, xmax, ymax]
+                            else:
+                                total_normalize_frame_to_bbox[bbox['label']] = normalize_frame_to_bbox
+                
+                replace_set.append((k, total_normalize_frame_to_bbox))
                 for x1, x2 in replace_set:
-                    sentence["value"] = sentence["value"].replace(x1, x2) 
+                    sentence["value"] = sentence["value"].replace(str(x1), str(x2)) 
             else:
                 pass
 
+    print(sources)
     return sources
 
 
@@ -1234,7 +1265,7 @@ class LazySupervisedDataset(Dataset):
 
     def _get_item(self, i) -> Dict[str, torch.Tensor]:
         sources = self.list_data_dict[i]
-        if isinstance(i, int):
+        if isinstance(i, int) or isinstance(i, dict):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
         if "image" in sources[0]:
@@ -1255,8 +1286,8 @@ class LazySupervisedDataset(Dataset):
             video_folder = self.data_args.video_folder
             video_file = os.path.join(video_folder, video_file)
             suffix = video_file.split(".")[-1]
-            if not os.path.exists(video_file):
-                print("File {} not exist!".format(video_file))
+            #if not os.path.exists(video_file):
+            #    print("File {} not exist!".format(video_file))
 
             try:
                 if "shareVideoGPTV" in video_file:
@@ -1291,8 +1322,11 @@ class LazySupervisedDataset(Dataset):
                         except IOError:
                             print(f"Failed to read frame at path: {frame_path}")
                 else:
-                    # video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration = process_video_with_decord_fps(video_file, self.data_args)
-                    video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
+                    if '.zip' in video_file:
+                        video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration = process_zip_path_video_frames(video_file, self.data_args)
+                    else:
+                        video, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration = process_video_with_decord_fps(video_file, self.data_args)
+                    # video, video_time, frame_time, num_frames_to_sample, frame_idx = process_video_with_decord(video_file, self.data_args)
 
                 processor = self.data_args.image_processor
                 image = processor.preprocess(video, return_tensors="pt")["pixel_values"]
@@ -1300,16 +1334,16 @@ class LazySupervisedDataset(Dataset):
                 # if isinstance(conv_value, list):
                 #     print(self.data_args)
                 #     conv_value = process_bbox(conv_value, self.data_args)
-                # self.data_args.frame_idx = frame_idx
-                # self.data_args.start_idx = start_idx
-                # self.data_args.duration = duration
-                # try:
-                #     self.data_args.meta = sources[0]["meta"]
-                # except:
-                #     pass
+                self.data_args.frame_idx = frame_idx
+                self.data_args.start_idx = start_idx
+                self.data_args.duration = duration
+                try:
+                    self.data_args.meta = sources[0]["meta"]
+                except:
+                    pass
                 if self.data_args.add_time_instruction:
                     # Removed "uniformly" from the instruction.
-                    time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
+                    time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
                     sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{time_instruciton}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
                 image = [(image, video[0].size, "video")]
                 sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)

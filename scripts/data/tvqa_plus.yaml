@@ -1,0 +1,3 @@
+datasets:
+  - json_path: /lustre/fs1/home/ttran/CAP/datasets/tvqa_plus/conv_tvqa_plus_train.json
+    sampling_strategy: "all"
