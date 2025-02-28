@@ -4,6 +4,9 @@ import logging.handlers
 import os
 import sys
 import numpy as np
+import torch
+import torchvision
+import zipfile
 
 import requests
 
@@ -21,6 +24,43 @@ try:
     from decord import VideoReader, cpu
 except ImportError:
     print("Please install pyav to use video processing functions.")
+
+# used for TVQA+ dataset, assume frames are 3 FPS
+# SET_FPS -> FPS to set to
+def process_zip_path_video_frames(path, data_args, VIDEO_FPS=3, SET_FPS=1):
+    assert SET_FPS <= VIDEO_FPS
+    # parse out zip file path from rest of path
+    path = path.split('.zip')
+    zip_path = path[0] + '.zip'
+    folder = path[1].replace('/', '')
+    
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        frame_list = [f for f in z.namelist() if folder in f and '.jpg' in f]
+        # FPS calc
+        total_frame_num = len(frame_list)
+        video_time = total_frame_num / VIDEO_FPS
+        frame_idx = [i for i in range(0, total_frame_num, VIDEO_FPS)]
+        frame_time = [i/SET_FPS for i in frame_idx]
+        duration = len(frame_idx)
+        start_idx = 0
+
+        if data_args.frames_upbound > 0:
+            if len(frame_idx) > data_args.frames_upbound:
+                # Choose random index, sample next frames_upbound frames
+                start_idx = np.random.randint(0, len(frame_idx) - data_args.frames_upbound)
+                frame_idx = frame_idx[start_idx:start_idx + data_args.frames_upbound]
+                frame_time = frame_time[start_idx:start_idx + data_args.frames_upbound]
+        
+        full_clip = []
+        for idx in frame_idx:
+            frame = torchvision.io.decode_image(torch.frombuffer(bytearray(z.read(frame_list[idx])), dtype=torch.uint8))
+            full_clip.append(frame)
+        full_clip = torch.stack(full_clip, dim=0)
+
+        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
+        num_frames_to_sample = num_frames = len(frame_idx)
+
+    return full_clip, video_time, frame_time, num_frames_to_sample, frame_idx, start_idx, duration
 
 
 def process_video_with_decord_fps(video_file, data_args):

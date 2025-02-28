@@ -8,8 +8,10 @@ import os
 from llava.constants import DEFAULT_IMAGE_TOKEN
 
 import torch
+import torchvision
 from torchmetrics.detection import IntersectionOverUnion
 from torch.utils.data import Dataset
+import zipfile
 
 from decord import VideoReader, cpu
 
@@ -104,6 +106,42 @@ def load_video(video_path, max_frames_num,fps=1, force_sample=False):
     spare_frames = vr.get_batch(frame_idx).asnumpy()
     # import pdb;pdb.set_trace()
     return spare_frames,frame_time,video_time
+    
+def load_video_zip(video_path, max_frames_num, fps=1, VIDEO_FPS=3, force_sample=False):
+    assert fps <= VIDEO_FPS
+    # parse out zip file path from rest of path
+    path = video_path.split('.zip')
+    zip_path = path[0] + '.zip'
+    folder = path[1].replace('/', '')
+
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        frame_list = [f for f in z.namelist() if folder in f and '.jpg' in f]
+        # FPS calc
+        total_frame_num = len(frame_list)
+        video_time = total_frame_num / VIDEO_FPS
+        frame_idx = [i for i in range(0, total_frame_num, VIDEO_FPS)]
+        frame_time = [i/fps for i in frame_idx]
+        duration = len(frame_idx)
+        start_idx = 0
+
+        if max_frames_num > 0:
+            if len(frame_idx) > max_frames_num:
+                # Choose random index, sample next frames_upbound frames
+                start_idx = np.random.randint(0, len(frame_idx) - max_frames_num)
+                frame_idx = frame_idx[start_idx:start_idx + max_frames_num]
+                frame_time = frame_time[start_idx:start_idx + max_frames_num]
+
+        full_clip = []
+        for idx in frame_idx:
+            frame = torchvision.io.decode_image(torch.frombuffer(bytearray(z.read(frame_list[idx])), dtype=torch.uint8))
+            full_clip.append(frame)
+        full_clip = torch.stack(full_clip, dim=0)
+
+        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
+        num_frames_to_sample = num_frames = len(frame_idx)
+
+    return full_clip, frame_time, video_time
+
 
 def final_iou(iou_dict):
     iou = 0
@@ -447,6 +485,7 @@ class NExTVideoDataset(Dataset):
         self.vid = None
         self.gt_ground = None
         self.iou = {}
+        self.qa_correct = None
         self.qa_accuracy = 0
     
     def load_dataset(self):
@@ -478,6 +517,8 @@ class NExTVideoDataset(Dataset):
                     "duration": tmp_gsub["duration"],
                     "location": tmp_gsub["location"][str(qid)]
                 }
+            video['answers'] = [video['a0'], video['a1'], video['a2'], video['a3'], video['a4']]
+            video['answer_idx'] = video['answers'].index(video['answer'])
             db_list.append(video)
 
         return db_list
@@ -499,6 +540,10 @@ class NExTVideoDataset(Dataset):
         # Save variables to be used in iou calculation
         self.gt_ground = data_item['gsub']['location']
         self.vid = data_item['qid']
+        
+        # QA testing
+        answer = data_item['answers'][int(data_item['answer_idx'])]
+        self.qa_correct = {data_item['answer_idx']: answer}
         
         return {
                 "video": video,
@@ -543,12 +588,187 @@ class NExTVideoDataset(Dataset):
         return self.eval_ground(self.gt_ground, gen_ground)
 
     def evaluate_qa(self, gen_response):
-        pass
+        print(self.qa_correct)
+        for idx, val in self.qa_correct.items():
+            if idx in gen_response or 'a'+str(idx) in gen_response or val in gen_response:
+                self.qa_accuracy += 1
+                return True
+            elif re.sub(r'[^\w\s]', '', val) in gen_response:
+                self.qa_accuracy += 1
+                return True
+            return False
         
-        # strip bboxes if necessary
         
-        # pass to llm to eval
+class TVQAPlusDataset(Dataset):
+    def __init__(self, dataset_path, video_path, split, image_processor, max_frames=8, video_processor=None, test_qa=False):
+        self.dataset_path = dataset_path
+        self.video_path = video_path
+        self.test_qa = test_qa
+        self.db = self.load_dataset()
+        self.split = split
+        self.max_frames = max_frames
+        self.image_processor = image_processor
+        self.video_processor = video_processor
+        self.vid = None
+        self.gt_ground = None
+        self.iou = {}
+        self.qa_correct = None
+        self.qa_accuracy = 0
+    
+    def load_dataset(self):
+        if not os.path.isfile(self.dataset_path):
+            raise FileNotFoundError(f'No such file: {self.dataset_path}')
+        with open(self.dataset_path, 'r') as f:
+            db_file = json.load(f)
+            self.len = len(db_file)
         
-        # add to self.qa_accuracy
+        db_list = []
+        for video in db_file:
+            video['video_path'] = os.path.join(self.video_path, video['vid_name'])
+            db_list.append(video)
+
+        return db_list
+            
+    def __len__(self):
+        return self.len
+    
+    def __getitem__(self, idx):
+        data_item = self.db[idx]
+        video_path = data_item['video_path']
         
+        # create video tensor
+        video, frame_time, video_time = load_video_zip(video_path, self.max_frames, fps=1, force_sample=True)
+        video = self.image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda().bfloat16()
+        video = [video]
         
+        # get bboxes
+        total_normalize_frame_to_bbox = {}
+        
+        # get objects in answer
+        answers = [data_item['a0'], data_item['a1'], data_item['a2'], data_item['a3'], data_item['a4']]
+        answer = answers[int(data_item['answer_idx'])]
+
+        for l, val in data_item['bbox'].items():
+            if len(val) == 0:
+                continue
+
+            normalize_frame_to_bbox = {}
+            for bbox in val:
+                if bbox['label'] in answer:
+                    xmin = bbox['left']
+                    xmax = bbox['left'] + bbox['width']
+                    ymin = bbox['top']
+                    ymax = bbox['top'] + bbox['height']
+                    normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
+                    if bbox['label'] in total_normalize_frame_to_bbox:
+                        total_normalize_frame_to_bbox[bbox['label']][l] = [xmin, ymin, xmax, ymax]
+                    else:
+                        total_normalize_frame_to_bbox[bbox['label']] = normalize_frame_to_bbox
+
+        # if empty, just put any bboxes
+        if len(total_normalize_frame_to_bbox) == 0:
+            for l, val in data_item['bbox'].items():
+                if len(val) == 0:
+                    continue
+
+                normalize_frame_to_bbox = {}
+                for bbox in val:
+                    if bbox['label'] in answer:
+                        xmin = bbox['left']
+                        xmax = bbox['left'] + bbox['width']
+                        ymin = bbox['top']
+                        ymax = bbox['top'] + bbox['height']
+                        normalize_frame_to_bbox[l] = [xmin, ymin, xmax, ymax]
+                        if bbox['label'] in total_normalize_frame_to_bbox:
+                            total_normalize_frame_to_bbox[bbox['label']][l] = [xmin, ymin, xmax, ymax]
+                        else:
+                            total_normalize_frame_to_bbox[bbox['label']] = normalize_frame_to_bbox
+
+
+        # Save variables to be used in iou calculation
+        self.gt_ground = data_item['ts']
+        self.vid = data_item['qid']
+        self.bboxes = total_normalize_frame_to_bbox
+        
+        # QA variables
+        self.qa_correct = {data_item['answer_idx']: answer}
+        if self.test_qa:
+            data_item['q'] = data_item['q'] + '\n1. ' + data_item['a0'] + '\n2. ' + data_item['a1'] + '\n3. ' + data_item['a2'] + '\n4. ' + data_item['a3']  + '\n5. ' + data_item['a4']
+        
+        return {
+                "video": video,
+                "question": data_item['q'],
+                "duration": [data_item['ts']], 
+                "video_path": data_item['video_path'],
+                "frame_time": frame_time,
+                "video_time": video_time
+            }
+        
+    def get_tIoU(self, loc, span):
+
+        if span[0] == span[-1]:
+            if loc[0] <= span[0] and span[0] <= loc[1]:
+                return 0, 1
+            else:
+                return 0, 0
+
+        span_u =  (min(loc[0], span[0]), max(loc[-1], span[-1]))
+        span_i = (max(loc[0], span[0]), min(loc[-1], span[-1]))
+        dis_i = (span_i[1] - span_i[0])
+        if span_u[1] > span_u[0]:
+            IoU = dis_i / (span_u[1] - span_u[0])
+        else:
+            IoU = 0.0
+        if span[-1] > span[0]:
+            IoP = dis_i / (span[-1] - span[0])
+        else:
+            IoP = 0.0
+
+        return IoU, IoP
+
+    # Assumes input gt_ground: [x,y], pred_ground: [x,y]
+    # technically tIoU
+    def eval_ground(self, gt_ground, pred_ground):      
+        span = pred_ground
+        tIoU, tIoP = self.get_tIoU(gt_ground, span)
+        self.iou[self.vid] = IoU
+        return tIoU
+
+    def calculate_tiou(self, gen_ground, question_index=None):
+        return self.eval_ground(self.gt_ground, gen_ground)
+        
+    def calculate_iou(self, gen_frames, question_index=None):
+        #boxes, labels = dict_to_list(gen_frames)
+        boxes, labels = dict_to_list(self.bboxes)
+        preds = [
+            {
+                "boxes": torch.tensor(boxes),
+                "labels": torch.tensor(labels),
+            }
+        ]
+        
+        boxes, labels = dict_to_list(self.bboxes)
+        target = [
+            {
+                "boxes": torch.tensor(boxes),
+                "labels": torch.tensor(labels)
+            }
+        ]
+            
+        metric = IntersectionOverUnion()
+        iou = metric(preds, target)
+        self.iou[self.vid] = iou['iou']
+            
+        return iou
+
+    # TODO: edit llm prompt to only allow responses from 1 to 5
+    def evaluate_qa(self, gen_response):
+        print(self.qa_correct)
+        for idx, val in self.qa_correct.items():
+            if idx in gen_response or 'a'+str(idx) in gen_response or val in gen_response:
+                self.qa_accuracy += 1
+                return True
+            elif re.sub(r'[^\w\s]', '', val) in gen_response:
+                self.qa_accuracy += 1
+                return True
+            return False
