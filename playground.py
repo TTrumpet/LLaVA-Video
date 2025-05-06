@@ -97,15 +97,15 @@ def main(split, pretrained):
 
     # initialize model
     # pretrained = "/home/jfioresi/vlm/LLaVA-Video/work_dirs/llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-ov_to_video_elysium_100K_lora_4gpu"
-    pretrained = "/home/jfioresi/vlm/LLaVA-Video/work_dirs/llavavideo-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-elysium_100K_lora_a1"
-    model_name = os.path.basename(pretrained)
-    # model_name = "lmms-lab/LLaVA-Video-7B-Qwen2"
+    #pretrained = "/home/jfioresi/vlm/LLaVA-Video/work_dirs/llavavideo-google_siglip-so400m-patch14-384-Qwen_Qwen2-7B-Instruct-elysium_100K_lora_a1"
+    #model_name = os.path.basename(pretrained)
+    model_name = "lmms-lab/LLaVA-Video-7B-Qwen2"
     # model_name_short = pretrained[pretrained.index("video") + 6 :]
-    model_base = "lmms-lab/LLaVA-Video-7B-Qwen2"
+    #model_base = "lmms-lab/LLaVA-Video-7B-Qwen2"
     device = "cuda"
     device_map = "auto"
     max_frames_num = 8
-    tokenizer, model, image_processor, max_length = load_model(pretrained, model_name, model_base, device, device_map)
+    tokenizer, model, image_processor, max_length = load_model(pretrained, model_name, None, device, device_map)
     
     # _, model_orig, _, _ = load_model(model_base, model_base, None, device, device_map)
 

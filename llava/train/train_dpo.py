@@ -1683,6 +1683,8 @@ def train(attn_implementation=None):
                 for name, param in model.named_parameters():
                     if "vision_tower" not in name and "mm_projector" not in name and "vision_resampler" not in name:
                         param.requires_grad_(True)
+            # TODO : add way to train bbox parallel
+            #if "mm_bbox_"
 
         total_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
         trainable_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters() if p.requires_grad)
@@ -1697,6 +1699,7 @@ def train(attn_implementation=None):
         training_args.use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
         model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
+        model.initialize_bbox_tokenizer(model_args, tokenizer=tokenizer)
 
         if ref_model is not None:
             ref_model.get_model().initialize_vision_modules(model_args=model_args, fsdp=training_args.fsdp)
@@ -1711,6 +1714,7 @@ def train(attn_implementation=None):
             ref_model.config.mm_use_im_start_end = data_args.mm_use_im_start_end
             ref_model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
             ref_model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
+            ref_model.initialize_bbox_tokenizer(model_args, tokenizer=tokenizer)
             parameter_names = [n for n, _ in ref_model.named_parameters()]
             for param_name in parameter_names:
                 param = ref_model.get_parameter(param_name)

@@ -24,7 +24,7 @@ from .multimodal_encoder.builder import build_vision_tower
 from .multimodal_resampler.builder import build_vision_resampler
 from .multimodal_projector.builder import build_vision_projector
 
-from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN
 
 from llava.mm_utils import get_anyres_image_grid_shape
 from llava.utils import rank0_print, rank_print
@@ -218,6 +218,10 @@ class LlavaMetaForCausalLM(ABC):
                 all_videos_or_images_features.append(feat)
             all_faster_video_features.append(faster_video_feature)
         return all_videos_or_images_features,all_faster_video_features
+    
+    # new function to replace bboxes with embeddings
+    def encode_bboxes(self, bboxes, bbox_idx_in_batch):
+        pass
 
     def add_token_per_grid(self, image_feature):
         resize_h = int(math.sqrt(image_feature.shape[1]))
@@ -248,7 +252,13 @@ class LlavaMetaForCausalLM(ABC):
         image_feature = image_feature.permute(1, 2, 0).contiguous()
         return image_feature
 
+# new embedding for bboxes = bbox
     def prepare_inputs_labels_for_multimodal(self, input_ids, position_ids, attention_mask, past_key_values, labels, images, modalities=["image"], image_sizes=None):
+        print("In prepare input labels for multimodal")
+
+        #bbox = get embedding from trained model
+
+        print(input_ids)
         vision_tower = self.get_vision_tower()
         # rank_print(modalities)
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
@@ -551,8 +561,27 @@ class LlavaMetaForCausalLM(ABC):
             position_ids[:, :split_position] += left_add
             position_ids[:, split_position:] += right_add
         # import pdb; pdb.set_trace()
+        # TODO: inserting bbox embeddings
+        # rank0_print("Inserting bbox embeddings")
+
         # rank0_print("Finish preparing")
         return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels
+    
+    # TODO: add special tokens for bbox start and end
+    def initialize_bbox_tokenizer(self, model_args, tokenizer):
+        #if model_args.mm_use_bbox_token:
+        num_new_tokens = tokenizer.add_tokens([DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN], special_tokens=True)
+        self.resize_token_embeddings(len(tokenizer))
+
+        if num_new_tokens > 0:
+            input_embeddings = self.get_input_embeddings().weight.data
+            output_embeddings = self.get_output_embeddings().weight.data
+
+            input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+            output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+
+            input_embeddings[-num_new_tokens:] = input_embeddings_avg
+            output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
     def initialize_vision_tokenizer(self, model_args, tokenizer):
         if model_args.mm_use_im_patch_token:
