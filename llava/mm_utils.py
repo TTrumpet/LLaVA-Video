@@ -6,7 +6,7 @@ import ast
 import re
 import torch
 from transformers import StoppingCriteria
-from llava.constants import IMAGE_TOKEN_INDEX
+from llava.constants import IMAGE_TOKEN_INDEX, BBOX_INDEX
 
 
 def resize_and_center_crop(image, shortest_edge_length):
@@ -337,6 +337,62 @@ def process_images(images, image_processor, model_cfg):
         new_images = torch.stack(new_images, dim=0)
     return new_images
 
+# assumes single bbox start and end tokens and assumes input bboxes are normalized
+# returns tokenized prompt where between -300 are the normalized bounding box coordinates out of 1000
+def tokenizer_image_and_bbox_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX, bbox_token_index=BBOX_INDEX, return_tensors=None):
+    #torch.set_printoptions(profile="full")
+
+    # get bboxes between bbox_start and bbox_end
+    bboxes = prompt[prompt.index("<bbox_start>") + len("<bbox_start>"): prompt.index("<bbox_end>")]
+    bboxes = ast.literal_eval(bboxes)
+
+    # if decimal input, normalize bboxes to 1000
+    if all(x < 1 for bbox in bboxes for x in bbox):
+        bboxes = [x * 1000 for bbox in bboxes for x in bbox]
+
+    # replace special tokens with arbitrary value to replace all at once
+    # keep track of which seperator is what special token
+    special_token_index = []
+    for special_token in ["<image>", "<bbox_start>", "<bbox_end>"]:
+        token_index = prompt.index(special_token)
+        prompt =  prompt.replace(special_token, "<special_token>")
+        special_token_index.append((special_token, token_index))
+
+    # sort by ascending order, know which special token as seperator
+    special_token_index.sort(key=lambda tup: tup[1])
+
+    prompt_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<special_token>")]
+
+    input_ids = []
+    offset = 0
+    if len(prompt_chunks) > 0 and len(prompt_chunks[0]) > 0 and prompt_chunks[0][0] == tokenizer.bos_token_id:
+        offset = 1
+        input_ids.append(prompt_chunks[0][0])
+
+    # gets index corresponding to special token
+    index_list = []
+    for token in special_token_index:
+        if token[0] == "<image>":
+            index_list.append(image_token_index)
+        else:
+            index_list.append(bbox_token_index)
+
+    # adds tokenized input and special index to input_ids
+    # does not tokenize bboxes and adds normalized bbox coordinates out of 1000
+    for index, token in enumerate(index_list):
+        if special_token_index[index][0] == "<bbox_end>":
+            input_ids.extend(bboxes)
+            input_ids.append(token)
+        else:
+            input_ids.extend(prompt_chunks[index])
+            input_ids.append(token)
+    input_ids.extend(prompt_chunks[len(index_list)])
+
+    if return_tensors is not None:
+        if return_tensors == "pt":
+            return torch.tensor(input_ids, dtype=torch.long)
+        raise ValueError(f"Unsupported tensor type: {return_tensors}")
+    return input_ids
 
 def tokenizer_image_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX, return_tensors=None):
     prompt_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
@@ -358,7 +414,6 @@ def tokenizer_image_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX
             return torch.tensor(input_ids, dtype=torch.long)
         raise ValueError(f"Unsupported tensor type: {return_tensors}")
     return input_ids
-
 
 def get_model_name_from_path(model_path):
     model_path = model_path.strip("/")

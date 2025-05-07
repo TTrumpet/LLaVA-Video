@@ -24,7 +24,7 @@ from .multimodal_encoder.builder import build_vision_tower
 from .multimodal_resampler.builder import build_vision_resampler
 from .multimodal_projector.builder import build_vision_projector
 
-from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN
+from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, BBOX_INDEX, DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN
 
 from llava.mm_utils import get_anyres_image_grid_shape
 from llava.utils import rank0_print, rank_print
@@ -252,13 +252,34 @@ class LlavaMetaForCausalLM(ABC):
         image_feature = image_feature.permute(1, 2, 0).contiguous()
         return image_feature
 
-# new embedding for bboxes = bbox
     def prepare_inputs_labels_for_multimodal(self, input_ids, position_ids, attention_mask, past_key_values, labels, images, modalities=["image"], image_sizes=None):
         print("In prepare input labels for multimodal")
+        torch.set_printoptions(profile="full")
+        #torch.set_printoptions(profile="default")
+        #print(input_ids)
+
+        # extract bboxes from input_ids
+        # assuming one bbox start and end token
+        if torch.is_tensor(input_ids):
+            input_ids_as_list = input_ids.tolist()[0]
+        else:
+            input_ids_as_list = input_ids[0]
+        bbox_start = input_ids_as_list.index(BBOX_INDEX)
+        bbox_end = input_ids_as_list.index(BBOX_INDEX, bbox_start+1)
+        bboxes = input_ids_as_list[bbox_start+1:bbox_end] # bboxes as a single list of normalized integers out of 1000
 
         #bbox = get embedding from trained model
 
+        # remove bboxes and replace with ignore token
+        input_list_without_bbox = input_ids_as_list[:bbox_start]
+        input_list_without_bbox.append(IGNORE_INDEX)
+        input_list_without_bbox.extend(input_ids_as_list[bbox_end+1:])
+        #print(input_list_without_bbox)
+
+        input_ids = torch.tensor([input_list_without_bbox], dtype=torch.long, device=input_ids.device)
         print(input_ids)
+
+
         vision_tower = self.get_vision_tower()
         # rank_print(modalities)
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
@@ -455,10 +476,10 @@ class LlavaMetaForCausalLM(ABC):
         new_input_embeds = []
         new_labels = []
         cur_image_idx = 0
-        # rank_print("Inserting Images embedding")
+        rank_print("Inserting Images embedding")
         for batch_idx, cur_input_ids in enumerate(input_ids):
             num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
-            # rank0_print(num_images)
+            rank0_print(num_images)
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx]
                 cur_input_embeds_1 = self.get_model().embed_tokens(cur_input_ids)
@@ -472,6 +493,7 @@ class LlavaMetaForCausalLM(ABC):
             cur_input_ids_noim = []
             cur_labels = labels[batch_idx]
             cur_labels_noim = []
+            rank0_print(image_token_indices)
             for i in range(len(image_token_indices) - 1):
                 cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
                 cur_labels_noim.append(cur_labels[image_token_indices[i] + 1 : image_token_indices[i + 1]])
@@ -521,7 +543,7 @@ class LlavaMetaForCausalLM(ABC):
         new_labels_padded = torch.full((batch_size, max_len), IGNORE_INDEX, dtype=new_labels[0].dtype, device=new_labels[0].device)
         attention_mask = torch.zeros((batch_size, max_len), dtype=attention_mask.dtype, device=attention_mask.device)
         position_ids = torch.zeros((batch_size, max_len), dtype=position_ids.dtype, device=position_ids.device)
-        # rank0_print("Prepare pos id")
+        rank0_print("Prepare pos id")
 
         for i, (cur_new_embed, cur_new_labels) in enumerate(zip(new_input_embeds, new_labels)):
             cur_len = cur_new_embed.shape[0]
@@ -562,9 +584,10 @@ class LlavaMetaForCausalLM(ABC):
             position_ids[:, split_position:] += right_add
         # import pdb; pdb.set_trace()
         # TODO: inserting bbox embeddings
-        # rank0_print("Inserting bbox embeddings")
+        rank0_print("Inserting bbox embeddings")
 
-        # rank0_print("Finish preparing")
+        rank0_print("Finish preparing")
+        print(new_input_embeds)
         return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels
     
     # TODO: add special tokens for bbox start and end

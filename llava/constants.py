@@ -10,6 +10,6 @@ DEFAULT_IMAGE_TOKEN = "<image>"
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
 DEFAULT_IM_START_TOKEN = "<im_start>"
 DEFAULT_IM_END_TOKEN = "<im_end>"
-
+BBOX_INDEX= -300
 DEFAULT_BBOX_START_TOKEN = "<bbox_start>"
 DEFAULT_BBOX_END_TOKEN = "<bbox_end>"
