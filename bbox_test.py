@@ -163,7 +163,12 @@ def main(split, pretrained):
         conv.append_message(conv.roles[1], None)
         prompt_question = conv.get_prompt()
 
+        tokenizer.add_tokens([DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN], special_tokens=True)
+        model.resize_token_embeddings(len(tokenizer))
         input_ids = tokenizer_image_and_bbox_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
+        #input_ids = tokenizer_image_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
+
+
         print(input_ids)
         cont = generate(model, input_ids, video)
         text_outputs = tokenizer.batch_decode(cont, skip_special_tokens=True)[0].strip()

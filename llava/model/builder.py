@@ -20,7 +20,7 @@ import shutil
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 import torch
 from llava.model import *
-from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN
 from llava.utils import rank0_print
 
 # TODO: add loading in the special tokens here as well
@@ -328,10 +328,13 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
     if "llava" in model_name.lower() or is_multimodal:
         mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
         mm_use_im_patch_token = getattr(model.config, "mm_use_im_patch_token", True)
+        mm_use_bbox_start_end = getattr(model.config, "mm_use_bbox_start_end", True)
         if mm_use_im_patch_token:
             tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         if mm_use_im_start_end:
             tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+        if mm_use_bbox_start_end:
+            tokenizer.add_tokens([DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN], special_tokens=True)
         model.resize_token_embeddings(len(tokenizer))
 
         vision_tower = model.get_vision_tower()
