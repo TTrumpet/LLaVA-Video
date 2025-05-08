@@ -463,6 +463,7 @@ class LlavaMetaForCausalLM(ABC):
 
             # extract bboxes from input_ids
             # assuming one bbox start and end token
+            '''
             if torch.is_tensor(cur_input_ids):
                 input_ids_as_list = cur_input_ids.tolist()
             else:
@@ -478,7 +479,7 @@ class LlavaMetaForCausalLM(ABC):
                 # remove bboxes and replace with ignore token
                 input_list_without_bbox = input_ids_as_list[:bbox_start]
                 #input_list_without_bbox.extend([IGNORE_INDEX] * (len(bboxes)+2))
-                input_list_without_bbox.append(IGNORE_INDEX) # put IGNORE at bbox_start index
+                #input_list_without_bbox.append(IGNORE_INDEX)
                 input_list_without_bbox.extend(input_ids_as_list[bbox_end+1:])
                 #print(input_list_without_bbox)
 
@@ -489,6 +490,7 @@ class LlavaMetaForCausalLM(ABC):
                 print("No bboxes detected.")
 
             print(cur_input_ids)
+            '''
 
             num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
             rank0_print(num_images)
@@ -502,17 +504,28 @@ class LlavaMetaForCausalLM(ABC):
                 cur_image_idx += 1
                 continue
 
-            image_token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+            #image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist()
+            #bbox_token_indices = torch.where(cur_input_ids == BBOX_INDEX)[0].tolist()
+            token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + torch.where(cur_input_ids == BBOX_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+            
             cur_input_ids_noim = []
             cur_labels = labels[batch_idx]
             cur_labels_noim = []
-            rank0_print(image_token_indices)
-            for i in range(len(image_token_indices) - 1):
-                cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
-                cur_labels_noim.append(cur_labels[image_token_indices[i] + 1 : image_token_indices[i + 1]])
+            #rank0_print(image_token_indices)
+
+            # TODO: make sure there is a saved index for bbox
+            for i in range(len(token_indices) - 1):
+                cur_input_ids_noim.append(cur_input_ids[token_indices[i] + 1 : token_indices[i + 1]])
+                cur_labels_noim.append(cur_labels[token_indices[i] + 1 : token_indices[i + 1]])
+
+            exit()
             split_sizes = [x.shape[0] for x in cur_labels_noim]
 
             # TODO: before getting embeds, split embeds where bbox embeds should go
+            # split at bbox start index
+            print(cur_input_ids_noim)
+            exit()
+
             
             cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_noim))
             cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
