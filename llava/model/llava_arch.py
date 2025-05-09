@@ -629,10 +629,10 @@ class LlavaMetaForCausalLM(ABC):
         # TODO: inserting bbox embeddings
         #rank0_print("Inserting bbox embeddings")
 
-        rank0_print("Finish preparing")
-        print(new_input_embeds[0].shape)
+        #rank0_print("Finish preparing")
+        #print(new_input_embeds[0].shape)
         #print(new_input_embeds)
-        exit()
+        #exit()
         return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels
     
     # TODO: add special tokens for bbox start and end
