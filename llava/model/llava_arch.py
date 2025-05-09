@@ -220,7 +220,7 @@ class LlavaMetaForCausalLM(ABC):
         return all_videos_or_images_features,all_faster_video_features
     
     # new function to replace bboxes with embeddings
-    def encode_bboxes(self, bboxes, bbox_idx_in_batch):
+    def encode_bboxes(self, bboxes):
         pass
 
     def add_token_per_grid(self, image_feature):
@@ -253,11 +253,11 @@ class LlavaMetaForCausalLM(ABC):
         return image_feature
 
     def prepare_inputs_labels_for_multimodal(self, input_ids, position_ids, attention_mask, past_key_values, labels, images, modalities=["image"], image_sizes=None):
-        print("In prepare input labels for multimodal")
+        #print("In prepare input labels for multimodal")
         torch.set_printoptions(profile="full")
         #torch.set_printoptions(profile="default")
-        print(input_ids)
-        print(len(input_ids[0]))
+        #print(input_ids)
+        #print(len(input_ids[0]))
 
         vision_tower = self.get_vision_tower()
         # rank_print(modalities)
@@ -455,11 +455,8 @@ class LlavaMetaForCausalLM(ABC):
         new_input_embeds = []
         new_labels = []
         cur_image_idx = 0
-        rank_print("Inserting Images embedding")
+        #rank_print("Inserting Images embedding")
         for batch_idx, cur_input_ids in enumerate(input_ids):
-            print("batch_idx: ", batch_idx)
-            print("cur_input_ids: ", cur_input_ids)
-            print("len new_input_embeds: ", len(new_input_embeds))
 
             # extract bboxes from input_ids
             # assuming one bbox start and end token
@@ -493,7 +490,7 @@ class LlavaMetaForCausalLM(ABC):
             '''
 
             num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
-            rank0_print(num_images)
+            #rank0_print(num_images)
             # no images, no bboxes
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx]
@@ -504,45 +501,62 @@ class LlavaMetaForCausalLM(ABC):
                 cur_image_idx += 1
                 continue
 
-            #image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist()
-            #bbox_token_indices = torch.where(cur_input_ids == BBOX_INDEX)[0].tolist()
+            image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist()
+            bbox_token_indices = torch.where(cur_input_ids == BBOX_INDEX)[0].tolist()
             token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + torch.where(cur_input_ids == BBOX_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+            token_indices.sort()
             
             cur_input_ids_noim = []
             cur_labels = labels[batch_idx]
             cur_labels_noim = []
             #rank0_print(image_token_indices)
+            #rank0_print(bbox_token_indices)
 
-            # TODO: make sure there is a saved index for bbox
             for i in range(len(token_indices) - 1):
-                cur_input_ids_noim.append(cur_input_ids[token_indices[i] + 1 : token_indices[i + 1]])
-                cur_labels_noim.append(cur_labels[token_indices[i] + 1 : token_indices[i + 1]])
 
-            exit()
+                # if bbox start token, do not append
+                if token_indices[i] == bbox_token_indices[0]:
+                    bboxes = cur_input_ids[token_indices[i] + 1 : token_indices[i + 1]]
+                    print("Extracted bboxes: ", bboxes)
+                else:
+                    cur_input_ids_noim.append(cur_input_ids[token_indices[i] + 1 : token_indices[i + 1]])
+                    cur_labels_noim.append(cur_labels[token_indices[i] + 1 : token_indices[i + 1]])
+
             split_sizes = [x.shape[0] for x in cur_labels_noim]
 
-            # TODO: before getting embeds, split embeds where bbox embeds should go
-            # split at bbox start index
-            print(cur_input_ids_noim)
-            exit()
-
-            
             cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_noim))
             cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
             cur_new_input_embeds = []
             cur_new_labels = []
 
-            for i in range(num_images + 1):
+            #for index in token_indices:
+            #    cur_new_input_embeds.append(cur_input_embeds_no_im[i])
+            #    cur_new_labels.append(cur_labels_noim[i])
+
+            #for i in range(num_images + 1):
+            for i in range(len(split_sizes)):
+                #print("length of new input embeds: ", len(cur_new_input_embeds))
+                print("shape of current non-image embedding: ", cur_input_embeds_no_im[i].shape)
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
-                if i < num_images:
+                #print("i: ", i)
+                #print("token_indices[i + 1]: ", token_indices[i+1])
+                if token_indices[i + 1] in image_token_indices:
                     try:
                         cur_image_features = image_features[cur_image_idx]
                     except IndexError:
                         cur_image_features = image_features[cur_image_idx - 1]
                     cur_image_idx += 1
+                    print("shape of current image embedding: ", cur_image_features.shape)
                     cur_new_input_embeds.append(cur_image_features)
                     cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
+                elif token_indices[i + 1] in bbox_token_indices:
+                    # TODO: input bbox embedding here
+                    # note: only add during first time (don't want to add embed twice)
+                    # can use extracted bboxes e.g encode_bboxes(bboxes)
+                    pass
+
+            #print(len(cur_new_input_embeds))
 
             cur_new_input_embeds = [x.to(self.device) for x in cur_new_input_embeds]
 
@@ -552,8 +566,6 @@ class LlavaMetaForCausalLM(ABC):
 
             new_input_embeds.append(cur_new_input_embeds)
             new_labels.append(cur_new_labels)
-
-        exit()
 
         # Truncate sequences to max length as image embeddings can make the sequence longer
         tokenizer_model_max_length = getattr(self.config, "tokenizer_model_max_length", None)
@@ -570,19 +582,11 @@ class LlavaMetaForCausalLM(ABC):
         max_len = max(x.shape[0] for x in new_input_embeds)
         batch_size = len(new_input_embeds)
 
-        print(len(new_input_embeds))
-        print(new_input_embeds[0].shape)
-        print(len(new_labels))
-        print(new_labels[0].shape)
-        print(attention_mask.shape)
-        print(attention_mask)
-        print(position_ids.shape)
-        print(position_ids)
         new_input_embeds_padded = []
         new_labels_padded = torch.full((batch_size, max_len), IGNORE_INDEX, dtype=new_labels[0].dtype, device=new_labels[0].device)
         attention_mask = torch.zeros((batch_size, max_len), dtype=attention_mask.dtype, device=attention_mask.device)
         position_ids = torch.zeros((batch_size, max_len), dtype=position_ids.dtype, device=position_ids.device)
-        rank0_print("Prepare pos id")
+        #rank0_print("Prepare pos id")
 
         for i, (cur_new_embed, cur_new_labels) in enumerate(zip(new_input_embeds, new_labels)):
             cur_len = cur_new_embed.shape[0]
@@ -626,7 +630,6 @@ class LlavaMetaForCausalLM(ABC):
         #rank0_print("Inserting bbox embeddings")
 
         rank0_print("Finish preparing")
-        print(len(new_input_embeds))
         print(new_input_embeds[0].shape)
         #print(new_input_embeds)
         exit()
