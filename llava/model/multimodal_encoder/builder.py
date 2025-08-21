@@ -6,6 +6,7 @@ from .hf_vision import HFVisionTower
 from .siglip_encoder import SigLipVisionTower
 from .clip_encoder import CLIPVisionTower, CLIPVisionTowerS2
 
+from .bbox_encoder import bboxEncoder, bboxDecoder
 # from .eva_clip.eva_clip_encoder import EvaClipVisionTower
 # from .dev_eva_clip.eva_vit import EvaViTWrapper
 
@@ -33,3 +34,9 @@ def build_vision_tower(vision_tower_cfg, **kwargs):
     #     return EvaViTWrapper(vision_tower, args=vision_tower_cfg, **kwargs)
 
     raise ValueError(f"Unknown vision tower: {vision_tower}")
+    
+def build_bbox_tower(bbox_tower_cfg, **kwargs):
+    bbox_tower = getattr(bbox_tower_cfg, "mm_bbox_tower", getattr(bbox_tower_cfg, "bbox_tower", None))
+    if "simple" in bbox_tower:
+        return bboxEncoder(), bboxDecoder()
+    raise ValueError(f"Unknown bbox tower: {bbox_tower}")

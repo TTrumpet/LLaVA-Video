@@ -20,9 +20,9 @@ import re
 import time
 import torch
 import torch.nn as nn
-from .multimodal_encoder.builder import build_vision_tower
+from .multimodal_encoder.builder import build_vision_tower, build_bbox_tower
 from .multimodal_resampler.builder import build_vision_resampler
-from .multimodal_projector.builder import build_vision_projector
+from .multimodal_projector.builder import build_vision_projector, build_bbox_projector
 
 from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, BBOX_INDEX, DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN
 
@@ -36,6 +36,7 @@ class LlavaMetaModel:
     def __init__(self, config):
         super(LlavaMetaModel, self).__init__(config)
 
+        
         if hasattr(config, "mm_vision_tower"):
             delay_load = getattr(config, "delay_load", False)
             self.vision_tower = build_vision_tower(config, delay_load=delay_load)
@@ -45,11 +46,24 @@ class LlavaMetaModel:
             if "unpad" in getattr(config, "mm_patch_merge_type", ""):
                 self.image_newline = nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
 
+        if hasattr(config, "mm_bbox_tower"):
+            self.bbox_encoder, self.bbox_decoder = build_bbox_tower(config)
+            self.mm_bbox_projector = build_bbox_projector(config)
+
+
     def get_vision_tower(self):
         vision_tower = getattr(self, "vision_tower", None)
         if type(vision_tower) is list:
             vision_tower = vision_tower[0]
         return vision_tower
+
+    def get_bbox_encoder(self):
+        bbox_encoder, bbox_decoder = getattr(self, "bbox_tower", None)
+        return bbox_encoder
+
+    def get_bbox_decoder(self):
+        bbox_encoder, bbox_decoder = getattr(self, "bbox_tower", None)
+        return bbox_decoder
 
     def initialize_vision_modules(self, model_args, fsdp=None):
         vision_tower = model_args.vision_tower
@@ -221,7 +235,12 @@ class LlavaMetaForCausalLM(ABC):
     
     # new function to replace bboxes with embeddings
     def encode_bboxes(self, bboxes):
-        pass
+        #print(self.get_model())
+        #print(self.get_model().get_bbox_tower())
+        bboxes = bboxes.reshape(-1,4)
+        bbox_features = self.get_model().get_bbox_encoder()(bboxes)
+        bbox_features = self.get_model().mm_bbox_projector(bbox_features)
+        return bbox_features
 
     def add_token_per_grid(self, image_feature):
         resize_h = int(math.sqrt(image_feature.shape[1]))
@@ -512,15 +531,19 @@ class LlavaMetaForCausalLM(ABC):
             #rank0_print(image_token_indices)
             #rank0_print(bbox_token_indices)
 
+            bboxes = None
             for i in range(len(token_indices) - 1):
 
                 # if bbox start token, do not append
+                # if bbox_token_indices is empty, there are no bbox tokens in the query
                 if token_indices[i] == bbox_token_indices[0]:
                     bboxes = cur_input_ids[token_indices[i] + 1 : token_indices[i + 1]]
-                    print("Extracted bboxes: ", bboxes)
+                    #print("Extracted bboxes: ", bboxes)
                 else:
                     cur_input_ids_noim.append(cur_input_ids[token_indices[i] + 1 : token_indices[i + 1]])
                     cur_labels_noim.append(cur_labels[token_indices[i] + 1 : token_indices[i + 1]])
+
+            cur_bboxes = bboxes
 
             split_sizes = [x.shape[0] for x in cur_labels_noim]
 
@@ -534,9 +557,10 @@ class LlavaMetaForCausalLM(ABC):
             #    cur_new_labels.append(cur_labels_noim[i])
 
             #for i in range(num_images + 1):
+            added_bbox_embedding = False
             for i in range(len(split_sizes)):
                 #print("length of new input embeds: ", len(cur_new_input_embeds))
-                print("shape of current non-image embedding: ", cur_input_embeds_no_im[i].shape)
+                #print("shape of current non-image embedding: ", cur_input_embeds_no_im[i].shape)
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
                 #print("i: ", i)
@@ -547,14 +571,22 @@ class LlavaMetaForCausalLM(ABC):
                     except IndexError:
                         cur_image_features = image_features[cur_image_idx - 1]
                     cur_image_idx += 1
-                    print("shape of current image embedding: ", cur_image_features.shape)
+                    #print("shape of current image embedding: ", cur_image_features.shape)
                     cur_new_input_embeds.append(cur_image_features)
                     cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
+                # adding bbox embedding
                 elif token_indices[i + 1] in bbox_token_indices:
-                    # TODO: input bbox embedding here
-                    # note: only add during first time (don't want to add embed twice)
-                    # can use extracted bboxes e.g encode_bboxes(bboxes)
-                    pass
+                    if not added_bbox_embedding:
+                        bbox_features = self.encode_bboxes(cur_bboxes)
+                        #print("shape of bbox embedding: ", bbox_features.shape)
+                        cur_new_input_embeds.append(bbox_features)
+                        # trying to get the model to output BBOX_INDEX in place of spatial info
+                        cur_new_labels.append(torch.full((bbox_features.shape[0],), BBOX_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
+
+                        added_bbox_embedding = True
+                    else:
+                        pass
+
 
             #print(len(cur_new_input_embeds))
 
@@ -629,10 +661,10 @@ class LlavaMetaForCausalLM(ABC):
         # TODO: inserting bbox embeddings
         #rank0_print("Inserting bbox embeddings")
 
-        rank0_print("Finish preparing")
-        print(new_input_embeds[0].shape)
+        #rank0_print("Finish preparing")
+        #print(new_input_embeds[0].shape)
         #print(new_input_embeds)
-        exit()
+        #exit()
         return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels
     
     # TODO: add special tokens for bbox start and end

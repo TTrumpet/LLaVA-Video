@@ -75,7 +75,7 @@ def load_video(video_path, max_frames_num,fps=1,force_sample=False):
     return spare_frames,frame_time,video_time
 
 def load_model(pretrained, model_name, model_base, device, device_map):
-    overwrite_config = {'tie_word_embeddings': False, 'use_cache': True, "vocab_size": 152064} if '7B' in model_name else None
+    overwrite_config = {'tie_word_embeddings': False, 'use_cache': True, "vocab_size": 152064, "mm_bbox_tower": "simple", "mm_box_hidden_size": 768} if '7B' in model_name else None
     tokenizer, model, image_processor, max_length = load_pretrained_model(pretrained, model_base, model_name, load_4bit=False, torch_dtype="bfloat16", device_map=device_map, overwrite_config=overwrite_config)  # Add any other thing you want to pass in llava_model_args
     model.eval()
     # model = model.to(torch.bfloat16)
@@ -141,8 +141,6 @@ def main(split, pretrained):
     outputs = {}
 
     for i in range(num_videos):
-        print(i)
-        print(data[i])
 
         # testing 1 video
         video_path = data[i]['video']
@@ -163,15 +161,15 @@ def main(split, pretrained):
         conv.append_message(conv.roles[1], None)
         prompt_question = conv.get_prompt()
 
-        tokenizer.add_tokens([DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN], special_tokens=True)
-        model.resize_token_embeddings(len(tokenizer))
+        #tokenizer.add_tokens([DEFAULT_BBOX_START_TOKEN, DEFAULT_BBOX_END_TOKEN], special_tokens=True)
+        #model.resize_token_embeddings(len(tokenizer))
         input_ids = tokenizer_image_and_bbox_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
         #input_ids = tokenizer_image_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
 
 
-        print(input_ids)
+        #print(input_ids)
         cont = generate(model, input_ids, video)
-        text_outputs = tokenizer.batch_decode(cont, skip_special_tokens=True)[0].strip()
+        text_outputs = tokenizer.batch_decode(cont, skip_special_tokens=False)[0].strip()
         print(text_outputs)
         output = text_outputs[text_outputs.index("{"):text_outputs.index("}") + 1]
         frames = ast.literal_eval(output)
