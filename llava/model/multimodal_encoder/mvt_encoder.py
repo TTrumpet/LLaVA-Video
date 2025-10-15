@@ -3,6 +3,8 @@ import torch.nn as nn
 from transformers import CLIPImageProcessor
 from vit_rope2d_hf import MLCDVisionModel
 
+# NOTE: Follow the instructions from the original repo to download unicom repository into the main directory
+
 class MvtVisionTower(nn.Module):
     def __init__(self, vision_tower_path, **kwargs):
         super().__init__()
