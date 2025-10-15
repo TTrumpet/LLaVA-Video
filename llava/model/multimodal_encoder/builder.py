@@ -5,6 +5,7 @@ from .open_clip_encoder import OpenCLIPVisionTower
 from .hf_vision import HFVisionTower
 from .siglip_encoder import SigLipVisionTower
 from .clip_encoder import CLIPVisionTower, CLIPVisionTowerS2
+from .mvt_encoder import MvtVisionTower
 
 from .bbox_encoder import bboxEncoder, bboxDecoder
 # from .eva_clip.eva_clip_encoder import EvaClipVisionTower
@@ -20,6 +21,8 @@ def build_vision_tower(vision_tower_cfg, **kwargs):
             return CLIPVisionTowerS2(vision_tower, args=vision_tower_cfg, **kwargs)
         else:
             return CLIPVisionTower(vision_tower, args=vision_tower_cfg, **kwargs)
+    elif "rice" in vision_tower.lower() or "deepglint" in vision_tower.lower():
+        return MvtVisionTower(vision_tower, args=vision_tower_cfg, **kwargs)
     elif "siglip" in vision_tower:
         return SigLipVisionTower(vision_tower, vision_tower_cfg=vision_tower_cfg, **kwargs)
     elif vision_tower.startswith("hf:"):

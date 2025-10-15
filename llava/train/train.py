@@ -708,9 +708,9 @@ def preprocess_qwen(sources, tokenizer: transformers.PreTrainedTokenizer, has_im
     im_start, im_end = tokenizer.additional_special_tokens_ids[:2]
 
     # TODO: rewrite to make it a toggle
-    tokenizer.add_tokens(["<bbox>"], special_tokens=True)
-    bbox_token_index = tokenizer.convert_tokens_to_ids("<bbox>")
-    bbox_start, bbox_end = tokenizer.additional_special_token_ids[:2]
+    #tokenizer.add_tokens(["<bbox>"], special_tokens=True)
+    #bbox_token_index = tokenizer.convert_tokens_to_ids("<bbox>")
+    #bbox_start, bbox_end = tokenizer.additional_special_token_ids[:2]
 
     # unmask_tokens = ["<|im_start|>", "<|im_start|>", "\n"]
     unmask_tokens_idx =  [198, im_start, im_end]

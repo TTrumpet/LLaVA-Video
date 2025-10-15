@@ -511,6 +511,7 @@ class LlavaMetaForCausalLM(ABC):
             num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
             #rank0_print(num_images)
             # no images, no bboxes
+            '''
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx]
                 cur_input_embeds_1 = self.get_model().embed_tokens(cur_input_ids)
@@ -519,11 +520,17 @@ class LlavaMetaForCausalLM(ABC):
                 new_labels.append(labels[batch_idx])
                 cur_image_idx += 1
                 continue
+            '''
 
+            image_token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+
+            # replace image and bbox tokens
+            '''
             image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist()
             bbox_token_indices = torch.where(cur_input_ids == BBOX_INDEX)[0].tolist()
             token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + torch.where(cur_input_ids == BBOX_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
             token_indices.sort()
+            '''
             
             cur_input_ids_noim = []
             cur_labels = labels[batch_idx]
@@ -531,6 +538,12 @@ class LlavaMetaForCausalLM(ABC):
             #rank0_print(image_token_indices)
             #rank0_print(bbox_token_indices)
 
+            for i in range(len(image_token_indices) - 1):
+                cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
+                cur_labels_noim.append(cur_labels[image_token_indices[i] + 1 : image_token_indices[i + 1]])
+
+            # image and bbox replace 
+            '''
             bboxes = None
             for i in range(len(token_indices) - 1):
 
@@ -544,6 +557,7 @@ class LlavaMetaForCausalLM(ABC):
                     cur_labels_noim.append(cur_labels[token_indices[i] + 1 : token_indices[i + 1]])
 
             cur_bboxes = bboxes
+            '''
 
             split_sizes = [x.shape[0] for x in cur_labels_noim]
 
@@ -556,7 +570,20 @@ class LlavaMetaForCausalLM(ABC):
             #    cur_new_input_embeds.append(cur_input_embeds_no_im[i])
             #    cur_new_labels.append(cur_labels_noim[i])
 
-            #for i in range(num_images + 1):
+            for i in range(num_images + 1):
+                cur_new_input_embeds.append(cur_input_embeds_no_im[i])
+                cur_new_labels.append(cur_labels_noim[i])
+                if i < num_images:
+                    try:
+                        cur_image_features = image_features[cur_image_idx]
+                    except IndexError:
+                        cur_image_features = image_features[cur_image_idx - 1]
+                    cur_image_idx += 1
+                    cur_new_input_embeds.append(cur_image_features)
+                    cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
+
+
+            '''
             added_bbox_embedding = False
             for i in range(len(split_sizes)):
                 #print("length of new input embeds: ", len(cur_new_input_embeds))
@@ -586,7 +613,7 @@ class LlavaMetaForCausalLM(ABC):
                         added_bbox_embedding = True
                     else:
                         pass
-
+            '''
 
             #print(len(cur_new_input_embeds))
 
