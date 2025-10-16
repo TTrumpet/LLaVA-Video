@@ -31,7 +31,6 @@ from transformers import Qwen2Config, Qwen2Model, Qwen2ForCausalLM
 # from .qwen.modeling_qwen import QWenLMHeadModel, QWenModel
 # from .qwen.configuration_qwen import QWenConfig
 
-
 class LlavaQwenConfig(Qwen2Config):
     model_type = "llava_qwen"
 
