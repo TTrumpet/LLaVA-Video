@@ -40,11 +40,12 @@ import deepspeed
 from peft import PeftModelForCausalLM 
 from transformers import AutoConfig, TrainerCallback
 from torch.utils.data import Dataset
-from llava.constants import IGNORE_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IMAGE_TOKEN_INDEX
+from llava.constants import *
 from llava.train.llava_trainer import LLaVATrainer
 
 from llava import conversation as conversation_lib
 from llava.model import *
+from llava.model.llava_stvg import LlavaQwenForSTVG # TODO: integrate into llava.model structure
 from llava.mm_utils import process_highres_image, process_anyres_image, process_highres_image_crop_split, tokenizer_image_token
 from llava.utils import rank0_print, process_video_with_pyav, process_video_with_decord, process_video_with_decord_fps, process_zip_path_video_frames
 
@@ -54,6 +55,48 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 local_rank = None
 
 IS_TOKENIZER_GREATER_THAN_0_14 = version.parse(tokenizers.__version__) >= version.parse("0.14")
+
+# custom trainer
+class STVGTrainer(LLaVATrainer):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return a tuple,
+        the first element of which must be the loss.
+        """
+        # This is the key change. We let the model do the forward pass.
+        # It will return our custom STVGOutput object.
+        outputs = model(**inputs)
+
+        # The loss is the first returned element.
+        loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        return (loss, outputs) if return_outputs else loss
+        
+    def training_step(self, model, inputs) -> torch.Tensor:
+        """
+        Perform a training step.
+        """
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        # We override compute_loss to get the outputs as well as the loss
+        loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+        
+        if self.args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
+        self.accelerator.backward(loss)
+
+        # --- Here is where you add your custom logging ---
+        if self.state.global_step % self.args.logging_steps == 0:
+            if self.is_world_process_zero(): # Only log on the main process
+                self.log({
+                    "loss_lm": outputs.loss - outputs.loss_bbox - outputs.policy_loss, # Recreate the lm loss
+                    "loss_bbox": outputs.loss_bbox.item(),
+                    "policy_loss": outputs.policy_loss.item(),
+                })
+        
+        return loss.detach() / self.args.gradient_accumulation_steps
 
 
 @dataclass
@@ -115,11 +158,16 @@ class ModelArguments:
     faster_token_stride: Optional[int] = field(default=10)
     
     # New bbox arguments
-    bbox_tower: Optional[str] = field(default="simple")
-    bbox_tower_pretrained: Optional[str] = field(default="simple") # not sure if we need this
+    #bbox_tower: Optional[str] = field(default="simple")
+    #bbox_tower_pretrained: Optional[str] = field(default="simple") # not sure if we need this
    
-    mm_box_hidden_size: Optional[int] = field(default=768)
-    mm_bbox_projector_type: Optional[str] = field(default="linear")
+    #mm_box_hidden_size: Optional[int] = field(default=768)
+    #mm_bbox_projector_type: Optional[str] = field(default="linear")
+    
+    model_class: str = field(
+        default="default",
+        metadata={"help": "Specify the model class to use, e.g., 'default' or 'stvg'"}
+    )
 
 
 @dataclass
@@ -416,6 +464,8 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
     is_multimodal = data_args.is_multimodal
     if not is_multimodal:
         return sources
+        
+    #print(data_args.dataset_paths[0])
 
     for source in sources:
         for sentence in source:
@@ -432,7 +482,7 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
             replace_token = DEFAULT_IMAGE_TOKEN #if '<video>' not in sentence["value"] else '<video>'
             if data_args.mm_use_im_start_end:
                 replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
-            sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token).replace('<video>\n', 'track the ')
+            #sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token).replace('<video>\n', 'track the ')
 
             # For videoInstruct-100k noisy_data. TODO: Ask Yuanhan to clean the data instead of leaving the noise code here.
             sentence["value"] = sentence["value"].replace("QA_GT_caption_based_noisy", "")
@@ -476,7 +526,7 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                     replace_set.append((k, convert(data_args.meta['duration'], v, len(data_args.frame_idx))))
                 for x1, x2 in replace_set:
                     sentence["value"] = sentence["value"].replace(x1, x2)
-                print(sentence)
+                #print(sentence)
             elif "tvqa_plus" in data_args.dataset_paths[0]:
                 #print("Preprocessing TVQA+...")
                 # Replace the tokens with frame ids
@@ -530,11 +580,21 @@ def preprocess_multimodal(sources: Sequence[str], data_args: DataArguments) -> D
                 
                 replace_set.append((k, total_normalize_frame_to_bbox))
                 for x1, x2 in replace_set:
-                    sentence["value"] = sentence["value"].replace(str(x1), str(x2)) 
+                    sentence["value"] = sentence["value"].replace(str(x1), str(x2))
+            elif 'stvg' in data_args.dataset_paths[0]:
+                #rank0_print("Preprocessing st-align...")
+                #bbox_pattern = r"(Object bounding box: )((?:\s*[\d\.]+:\s*\[[\d\s.,-]+\])+)"
+                if re.search(r"\{[^}]+\}", sentence['value']):
+                    
+                    part1 = f"During {DEFAULT_TEMPORAL_START_TOKEN}, {DEFAULT_TEMPORAL_END_TOKEN}."
+                    part2 = f" Object bounding box: {DEFAULT_BBOX_TOKEN}."
+                    clean_value = part1 + part2
+                    
+                    sentence['value'] = clean_value.strip()
             else:
                 pass
 
-    print(sources)
+    #print(sources)
     return sources
 
 
@@ -711,7 +771,13 @@ def preprocess_qwen(sources, tokenizer: transformers.PreTrainedTokenizer, has_im
     #tokenizer.add_tokens(["<bbox>"], special_tokens=True)
     #bbox_token_index = tokenizer.convert_tokens_to_ids("<bbox>")
     #bbox_start, bbox_end = tokenizer.additional_special_token_ids[:2]
-
+    
+    # ERROR: Back and forth from CUDA error and no attribute additional_special_token_ids
+    tokenizer.add_tokens(["<tubelet>","<ts_start>","<ts_end>"], special_tokens=True)
+    bbox_token = tokenizer.convert_tokens_to_ids("<tubelet>")
+    ts_start = tokenizer.convert_tokens_to_ids("<ts_start>")
+    ts_end = tokenizer.convert_tokens_to_ids("<ts_end>")
+    
     # unmask_tokens = ["<|im_start|>", "<|im_start|>", "\n"]
     unmask_tokens_idx =  [198, im_start, im_end]
     nl_tokens = tokenizer("\n").input_ids
@@ -1294,7 +1360,7 @@ class LazySupervisedDataset(Dataset):
                 image = [self.process_image(image_file)]
             sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)
 
-        elif "video" in sources[0]:
+        elif "video" in sources[0] or "video_path" in sources[0]:
             video_file = self.list_data_dict[i]["video"]
             video_folder = self.data_args.video_folder
             video_file = os.path.join(video_folder, video_file)
@@ -1356,8 +1422,9 @@ class LazySupervisedDataset(Dataset):
                     pass
                 if self.data_args.add_time_instruction:
                     # Removed "uniformly" from the instruction.
-                    time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
-                    sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{time_instruciton}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
+                    #time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {num_frames_to_sample} frames are sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
+                    #sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{time_instruciton}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
+                    sources[0]["conversations"][0]["value"] = f'{DEFAULT_IMAGE_TOKEN}\n{sources[0]["conversations"][0]["value"].replace(DEFAULT_IMAGE_TOKEN, "")}'
                 image = [(image, video[0].size, "video")]
                 sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)
             except Exception as e:
@@ -1382,6 +1449,8 @@ class LazySupervisedDataset(Dataset):
         if "image" in self.list_data_dict[i]:
             data_dict["image"] = image
         elif "video" in self.list_data_dict[i]:
+            data_dict["image"] = image
+        elif "video_path" in self.list_data_dict[i]:
             data_dict["image"] = image
         elif self.data_args.is_multimodal:
             # image does not exist in the data, but the model is multimodal
@@ -1443,6 +1512,108 @@ class DataCollatorForSupervisedDataset(object):
 
         return batch
 
+# --- NEW COLLATOR --- #
+@dataclass
+class DataCollatorForSTVG(object):
+    """
+    Collates examples for STVG, handling text, images, and variable-length
+    bounding box tracks.
+    """
+    tokenizer: transformers.PreTrainedTokenizer
+
+    def __init__(self, tokenizer: transformers.PreTrainedTokenizer):
+        self.tokenizer = tokenizer
+
+    def pad_sequence(self, input_ids, batch_first, padding_value):
+        # This is the same padding logic from the original collator
+        if self.tokenizer.padding_side == "left":
+            input_ids = [torch.flip(_input_ids, [0]) for _input_ids in input_ids]
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids, batch_first=batch_first, padding_value=padding_value
+        )
+        if self.tokenizer.padding_side == "left":
+            input_ids = torch.flip(input_ids, [1])
+        return input_ids
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        # --- 1. LOGIC COPIED FROM ORIGINAL DATA COLLATOR ---
+        
+        # Handle text (input_ids, labels)
+        input_ids, labels = tuple(
+            [instance[key] for instance in instances] for key in ("input_ids", "labels")
+        )
+        input_ids = [_input_ids[: self.tokenizer.model_max_length] for _input_ids in input_ids]
+        labels = [_labels[: self.tokenizer.model_max_length] for _labels in labels]
+        
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = 0
+            
+        input_ids = self.pad_sequence(
+            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
+        )
+        labels = self.pad_sequence(
+            labels, batch_first=True, padding_value=IGNORE_INDEX
+        )
+        batch = dict(
+            input_ids=input_ids,
+            labels=labels.long(),
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+        )
+
+        # Handle images/videos
+        if "image" in instances[0]:
+            images = [instance["image"] for instance in instances]
+            batch["image_sizes"] = [im[1] for im_list in images for im in im_list]
+            batch["modalities"] = [im[2] for im_list in images for im in im_list]
+            images = [im[0] for im_list in images for im in im_list]
+            batch["images"] = images
+        
+        # Check if the first instance has the required STVG data
+        if "meta" in instances[0] and "spatial_token" in instances[0]["meta"]:
+            timestamps_batch_list = []
+            bboxes_batch_list = []
+
+            # Loop through each raw instance to parse its meta dictionary
+            for instance in instances:
+                bboxes_dict = instance['meta']['spatial_token']['bboxes']
+                
+                current_timestamps = []
+                current_bboxes = []
+                for timestamp_str, bbox_coords in bboxes_dict.items():
+                    current_timestamps.append(float(timestamp_str))
+                    
+                    # Convert bbox format and append
+                    bbox_converted = convert_bbox_format(bbox_coords)
+                    current_bboxes.append(bbox_converted)
+                
+                # Create tensors for the current instance and add to our batch lists
+                timestamps_batch_list.append(torch.tensor(current_timestamps, dtype=torch.float32).unsqueeze(-1))
+                bboxes_batch_list.append(torch.tensor(current_bboxes, dtype=torch.float32))
+
+            # --- 3. NEW: Padding Logic (applied to the data we just parsed) ---
+            
+            # Find the length of the longest sequence in the batch
+            max_len = max(len(ts) for ts in timestamps_batch_list)
+
+            # Initialize padded tensors and the attention mask
+            batch_size = len(instances)
+            timestamps_padded = torch.full((batch_size, max_len, 1), -1.0, dtype=torch.float32)
+            bboxes_padded = torch.full((batch_size, max_len, 4), -1.0, dtype=torch.float32)
+            bbox_attention_mask = torch.zeros((batch_size, max_len), dtype=torch.bool)
+
+            # Fill the padded tensors
+            for i in range(batch_size):
+                seq_len = len(timestamps_batch_list[i])
+                timestamps_padded[i, :seq_len] = timestamps_batch_list[i]
+                bboxes_padded[i, :seq_len] = bboxes_batch_list[i]
+                bbox_attention_mask[i, :seq_len] = True
+
+            # Add the final padded tensors and mask to the batch
+            batch['timestamps'] = timestamps_padded
+            batch['ground_truth_bboxes'] = bboxes_padded
+            batch['bbox_attention_mask'] = bbox_attention_mask
+            
+        return batch
 
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
@@ -1508,6 +1679,19 @@ def get_model(model_args, training_args, bnb_model_from_pretrained_args):
             setattr(cfg_pretrained, k, v)
 
         customized_kwargs["config"] = cfg_pretrained
+
+    # --- LOAD NEW MODEL --- #
+    if model_args.model_class == 'stvg':
+        rank0_print("Loading custom LlavaQwenForSTVG model...")
+        model = LlavaQwenForSTVG.from_pretrained(
+            model_args.model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            attn_implementation=training_args.attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+            low_cpu_mem_usage=False,
+            **customized_kwargs,
+        )
+        return model  
 
     if model_args.model_class_name is not None:
         actual_model_class_name = f"{model_args.model_class_name}ForCausalLM"
@@ -1818,7 +2002,7 @@ def train(attn_implementation=None):
             model.get_model().mm_projector.requires_grad_(False)
             model.get_model().vision_resampler.requires_grad_(False)
             # Parse the mm_tunable_parts to decide which parts to unfreeze
-            tunable_parts = model_args.mm_tunable_parts.split(",")
+            tunable_parts = model_args.mm_tunable_parts.split(",")   
             if "mm_mlp_adapter" in tunable_parts:
                 for p in model.get_model().mm_projector.parameters():
                     p.requires_grad = True
@@ -1890,11 +2074,31 @@ def train(attn_implementation=None):
         for name, param in model.named_parameters():
             if "vision_tower" in name:
                 param.requires_grad_(True)
+                
+    # Turn on/off new modules
+    for name, param in model.named_parameters():
+        if "policy" in name:
+            if "stvg_policy" in tunable_parts:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        if "token_selector" in name:
+            if "stvg_selector" in tunable_parts:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        if "bbox_decoder" in name:
+            if "stvg_decoder" in tunable_parts:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
     #if "mm_bbox_tower" in tunable_parts:
     #    for name, param in model.named_parameters():
     #        if "bbox" in name:
     #            param.requires_grad_(True)
     
+    print("\nFinal list of trainable parameters:")
     for name, param in model.named_parameters():
            if param.requires_grad:
                print(name)
@@ -1905,7 +2109,16 @@ def train(attn_implementation=None):
     rank0_print(f"Trainable parameters: ~{trainable_params/1e6:.2f} MB)")
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
-    trainer = LLaVATrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+    if data_args.is_multimodal: # TODO: more specific check for STVG task
+        rank0_print("Using custom STVG data collator for padding variable-length tracks.")
+        data_module['data_collator'] = DataCollatorForSTVG(tokenizer=tokenizer)
+    #trainer = LLaVATrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+    trainer = STVGTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        args=training_args,
+        **data_module
+    )
 
     # Add custom callback.
     trainer.add_callback(SaveInterimCallback)

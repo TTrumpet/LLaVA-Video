@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.distributions import Categorical
 from torch.func import functional_call
 from collections import OrderedDict
 
@@ -131,23 +132,72 @@ class BBoxDecoder(nn.Module):
         return torch.vmap(predict_fn, in_dims=(0, 0), out_dims=0)(batched_params, timestamps)
 
 # --- Token Selection --- #
-class RLBudgetPolicy:
+class RLBudgetPolicy(nn.Module):
     """
-    Placeholder for the RL agent that determines the optimal token budget, K.
-    In a real implementation, this would be a more complex module that takes
-    some form of state (e.g., query embedding) and outputs K.
+    A learnable policy that determines the optimal token budget (K).
+
+    This module is a simple MLP that takes a state representation (e.g.,
+    a text query embedding) and outputs a probability distribution over a
+    pre-defined range of possible K values. It is trained using a
+    policy gradient algorithm like REINFORCE.
     """
-    def __init__(self, min_k: int, max_k: int):
+    def __init__(self, state_dim: int, min_k: int, max_k: int, hidden_dim: int = 128):
+        """
+        Initializes the policy network.
+
+        Args:
+            state_dim (int): The dimension of the input state vector.
+            min_k (int): The minimum possible value for K.
+            max_k (int): The maximum possible value for K.
+            hidden_dim (int): The size of the hidden layer in the policy network.
+        """
+        super().__init__()
         self.min_k = min_k
         self.max_k = max_k
-        print(f"RL Budget Policy (Placeholder) will select K between {min_k} and {max_k}.")
+        self.action_space_size = max_k - min_k + 1
 
-    def get_budget(self, batch_size: int) -> torch.Tensor:
+        # A simple two-layer MLP to act as the policy network
+        self.network = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, self.action_space_size),
+            # We output raw logits; softmax will be applied to create a distribution
+        )
+
+    def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Returns a budget K for each item in the batch.
-        For this example, we'll just return a random K for each.
+        Forward pass to select an action (K) for each state in the batch.
+
+        Args:
+            state (torch.Tensor): The state representation for each item in the batch.
+                                  Shape: (batch_size, state_dim).
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]:
+                - k_values (torch.Tensor): The selected K for each item. Shape: (batch_size,).
+                - log_probs (torch.Tensor): The log probability of the selected actions,
+                                            needed for the policy gradient loss.
+                                            Shape: (batch_size,).
         """
-        return torch.randint(self.min_k, self.max_k + 1, (batch_size,))
+        # 1. Get action logits from the policy network
+        action_logits = self.network(state)
+
+        # 2. Create a probability distribution over the possible actions
+        # The Categorical distribution handles sampling and log_prob calculation
+        prob_distribution = Categorical(logits=action_logits)
+
+        # 3. Sample an action (an index in our range of K's) from the distribution
+        # This is the "choice" the agent makes
+        action_indices = prob_distribution.sample()
+
+        # 4. Calculate the log probability of the chosen actions
+        # This is crucial for calculating the REINFORCE loss
+        log_probs = prob_distribution.log_prob(action_indices)
+
+        # 5. Convert the action index back to the actual K value
+        k_values = action_indices + self.min_k
+
+        return k_values, log_probs
 
 
 class DifferentiableGatingSelector(nn.Module):
@@ -177,18 +227,23 @@ class DifferentiableGatingSelector(nn.Module):
         """
         batch_size, num_tokens, _ = tokens.shape
         max_k = int(torch.max(K))
+        
+        safe_k = min(max_k, num_tokens)
+        if safe_k == 0:
+             # Handle the edge case of zero tokens
+             return torch.zeros(batch_size, 0, tokens.shape[-1], device=tokens.device, dtype=tokens.dtype)
 
         # 1. Calculate a score for each token
         scores = self.scorer(tokens).squeeze(-1)  # Shape: (B, num_tokens)
 
         # 2. Get the indices of the top K tokens
         # `topk` returns values and indices
-        _, topk_indices = torch.topk(scores, k=max_k, dim=1) # Shape: (B, max_k)
+        _, topk_indices = torch.topk(scores, k=safe_k, dim=1) # Shape: (B, max_k)
 
         # 3. Create a mask to handle variable K across the batch
         # This is important because `torch.gather` requires consistent indexing sizes.
         # We will select up to max_k for all, then mask out the extras.
-        arange = torch.arange(max_k, device=tokens.device).expand(batch_size, -1)
+        arange = torch.arange(safe_k, device=tokens.device).expand(batch_size, -1)
         mask = arange < K.unsqueeze(1) # Shape: (B, max_k)
 
         # 4. Gather the top tokens using the indices
